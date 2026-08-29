@@ -2847,125 +2847,30 @@ export function App() {
   }
 
   async function openTaskInThread(task: Task) {
-    const standalone = !embedded || window.parent === window;
-    const projectless = task.projectId === GLOBAL_PROJECT_ID;
-    const taskboardProject = projects.find((project) => project.id === task.projectId);
-    const savedRemoteIdentity = projectCodexIdentities[task.projectId]?.codexProjectKind === "remote"
-      ? projectCodexIdentities[task.projectId]
-      : null;
-    let codexProjectContext = savedRemoteIdentity
-      ?? codexProjectContextForTaskProject(task.projectId);
-    if (
-      projectCodexIdentities[task.projectId]?.codexProjectKind === "remote"
-      && !codexProjectContext
-    ) {
+    if (!localAiChatAvailable) {
       setActionError(text(
-        "已保存的 SSH 远程项目或主机当前不可用。",
-        "The saved SSH remote project or host is not available.",
-      ));
-      return;
-    }
-    if (!standalone && codexProjectContext?.codexProjectKind === "remote") {
-      const identity = remoteIdentityForTask(task, codexProjectContext);
-      if (!identity) {
-        setActionError(task.developmentContext?.type === "worktree"
-          ? text(
-            "目标 SSH worktree 未在保存的主机中添加或映射。",
-            "The target SSH worktree is not added or mapped on the saved host.",
-          )
-          : text(
-            "已保存的 SSH 远程项目或主机当前不可用。",
-            "The saved SSH remote project or host is not available.",
-          ));
-        return;
-      }
-      codexProjectContext = identity;
-    }
-    let workspacePath = projectless
-      ? undefined
-      : task.developmentContext?.type === "worktree"
-        ? task.developmentContext.path
-        : codexProjectContext?.workspacePath
-          ?? deviceWorkspacePaths[task.projectId]
-          ?? taskboardProject?.workspacePath;
-    const embeddedInstruction = text(
-      `[$manage-taskboard](${manageTaskboardSkillPath}) 议题 ID：${task.identifier}`,
-      `[$manage-taskboard](${manageTaskboardSkillPath}) Issue ID: ${task.identifier}`,
-    );
-
-    if (
-      !projectless
-      && task.developmentContext?.type === "worktree"
-      && codexProjectContext?.codexProjectKind !== "remote"
-    ) {
-      const expectedWorktreePath = task.developmentContext.path;
-      const baseWorkspacePath = codexProjectContext?.workspacePath
-        ?? deviceWorkspacePaths[task.projectId]
-        ?? taskboardProject?.workspacePath;
-      if (standalone) {
-        const worktreeExists = developmentScan.contexts.some((context) => (
-          context.type === "worktree" && context.path === expectedWorktreePath
-        ));
-        if (!worktreeExists) workspacePath = developmentScan.workspacePath ?? baseWorkspacePath;
-      } else {
-        try {
-          const scan = await listDevelopmentContexts(
-            task.projectId,
-            codexProjectContext?.codexProjectId,
-            hostContext?.threadId ?? undefined,
-            undefined,
-            baseWorkspacePath,
-          );
-          const worktreeExists = scan.contexts.some((context) => (
-            context.type === "worktree" && context.path === expectedWorktreePath
-          ));
-          if (!worktreeExists) workspacePath = scan.workspacePath ?? baseWorkspacePath;
-        } catch (error) {
-          setActionError(errorMessage(error));
-          return;
-        }
-      }
-    }
-
-    if (codexProjectContext?.codexProjectKind === "remote" && !codexProjectContext.workspacePath) {
-      setActionError(text(
-        "SSH 远程项目缺少精确工作目录映射。",
-        "The SSH remote project is missing its exact workspace mapping.",
+        "AI 对话仅在本机可用。请在运行看板服务的机器上用 http://127.0.0.1:47823 打开后操作。",
+        "AI conversations are only available locally. Open http://127.0.0.1:47823 on the machine running the board service.",
       ));
       return;
     }
     if (openingThreadTaskId) return;
-    if (standalone) {
-      if (codexProjectContext?.codexProjectKind === "remote") {
-        setActionError(text(
-          "该 SSH 远程项目的新对话需要在其原始环境中打开。",
-          "Open the new SSH remote project conversation in its original environment.",
-        ));
-        return;
-      }
-      const deepLink = new URL("codex://threads/new");
-      if (workspacePath) deepLink.searchParams.set("path", workspacePath);
-      deepLink.searchParams.set("prompt", embeddedInstruction);
-      window.location.assign(deepLink.toString());
-      return;
-    }
     setOpeningThreadTaskId(task.id);
     setActionError(null);
-    postEmbeddedHostMessage({
-      type: "taskboard:create-thread",
-      payload: {
-        taskId: task.id,
-        identifier: task.identifier,
-        title: task.title,
-        instruction: embeddedInstruction,
-        projectless,
-        codexProjectId: codexProjectContext?.codexProjectId,
-        codexProjectKind: codexProjectContext?.codexProjectKind ?? "local",
-        codexHostId: codexProjectContext?.codexHostId ?? "local",
-        codexProjectWorkspacePath: codexProjectContext?.workspacePath,
-        workspacePath,
-      },
-    });
+    try {
+      if (isAllProjects) changeProject(task.projectId);
+      setAiOpenThreadRequest((current) => ({
+        projectId: task.projectId,
+        issueId: task.id,
+        composerText: text(
+          `请使用 manage-taskboard 技能处理议题 ${task.identifier}（${task.title}）：先用 taskctl 读取议题与全部评论，按技能规则认领，然后完成描述中的工作、验证并推进状态。`,
+          `Process issue ${task.identifier} ("${task.title}") with the manage-taskboard skill: read the issue and all comments with taskctl, claim it per the skill rules, then complete the described work, verify it, and advance the status.`,
+        ),
+        requestId: (current?.requestId ?? 0) + 1,
+      }));
+    } finally {
+      setOpeningThreadTaskId(null);
+    }
   }
 
   function changeProject(projectId: string) {

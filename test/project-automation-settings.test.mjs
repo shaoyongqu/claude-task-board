@@ -76,26 +76,19 @@ test("project mapping is based on exact ids and workspace paths, never project n
   assert.doesNotMatch(appSource, /project\.name === selectedProject\.name/);
 });
 
-test("global tasks open a projectless conversation", () => {
+test("tasks open a new board AI conversation bound to the issue", () => {
   const openTaskSource = appSource.slice(
-    appSource.indexOf("function codexProjectContextForTaskProject"),
+    appSource.indexOf("async function openTaskInThread"),
     appSource.indexOf("function changeProject"),
   );
-  assert.match(
-    openTaskSource,
-    /if \(taskboardProjectId === GLOBAL_PROJECT_ID\) return null/,
-  );
-  assert.match(
-    openTaskSource,
-    /const projectless = task\.projectId === GLOBAL_PROJECT_ID/,
-  );
-  assert.match(openTaskSource, /codexProjectId: codexProject\.id,\s*codexProjectKind: codexProject\.projectKind/);
-  assert.match(openTaskSource, /const savedRemoteIdentity = projectCodexIdentities\[task\.projectId\]/);
-  assert.match(openTaskSource, /codexProjectContextForTaskProject\(task\.projectId\)/);
-  assert.match(openTaskSource, /project\.hostId === baseIdentity\.codexHostId/);
-  assert.match(openTaskSource, /project\.workspacePath === worktreePath/);
-  assert.match(openTaskSource, /if \(matches\.length !== 1\) return null/);
-  assert.match(openTaskSource, /codexProjectId: codexProjectContext\?\.codexProjectId/);
+  assert.match(openTaskSource, /if \(!localAiChatAvailable\)/);
+  assert.match(openTaskSource, /127.0.0.1/);
+  assert.match(openTaskSource, /projectId: task.projectId/);
+  assert.match(openTaskSource, /issueId: task.id/);
+  assert.match(openTaskSource, /manage-taskboard/);
+  assert.match(openTaskSource, /setAiOpenThreadRequest/);
+  assert.doesNotMatch(openTaskSource, /codex:/);
+  assert.doesNotMatch(openTaskSource, /taskboard:create-thread/);
 });
 
 test("the project navigation automation menu owns the icon, fields, and accessible popover", () => {

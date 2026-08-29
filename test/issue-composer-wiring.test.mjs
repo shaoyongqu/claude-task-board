@@ -86,10 +86,11 @@ test("task composer document converts only durable references and keeps slash an
   });
 });
 
-test("open in new conversation bypasses AI chat while its durable reference rebind stays internal", () => {
+test("open in new conversation drives the board AI chat while its durable reference rebind stays internal", () => {
   assert.match(apiSource, /"\/api\/local\/ai\/composer\/rebind"/);
   assert.doesNotMatch(appSource, /rebindAiChatComposerReferences/);
-  assert.match(appSource, /type: "taskboard:create-thread"/);
+  assert.doesNotMatch(appSource, /taskboard:create-thread/);
+  assert.match(appSource, /setAiOpenThreadRequest\(\(current\) => \(\{/);
   assert.match(chatSource, /await rebindAiChatComposerReferences\(\{/);
   assert.match(chatSource, /if \(!unavailable\) tokenElement\.dataset\.composerCandidateRef = node\.candidateRef/);
   assert.match(chatSource, /setComposerRevision\(composerDraft\.revision\)/);
