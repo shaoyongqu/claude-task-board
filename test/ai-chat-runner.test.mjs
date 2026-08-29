@@ -503,3 +503,39 @@ test("composer candidates for the issue surface keep insert-only slash actions",
   const chatSurface = composerCandidatesForSurface(response, "ai-chat");
   assert.equal(chatSurface, response);
 });
+
+test("a composer-format turn with only text nodes starts without a message field", async () => {
+  const fixture = await createServiceFixture();
+  try {
+    const thread = await fixture.service.createThread({ projectId: "local" });
+    const run = await fixture.service.startTurn(thread.id, {
+      contractVersion: "composer.v1",
+      revision: "unused",
+      document: { version: 1, nodes: [{ type: "text", text: "hello from composer" }] },
+    });
+    const finished = await waitFor(() => {
+      const current = fixture.service.getRun(run.id);
+      return current.status === "completed" ? current : null;
+    });
+    assert.equal(finished.exitCode, 0);
+    const events = fixture.database.listAiChatEvents(thread.id);
+    assert.equal(events.at(0).type, "user_message");
+    assert.equal(events.at(0).content, "hello from composer");
+  } finally {
+    await fixture.service.close();
+    fixture.database.close();
+    await rmWithRetryIfPresent(fixture.directory);
+  }
+});
+
+async function rmWithRetryIfPresent(directory) {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    try {
+      await rm(directory, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (attempt === 29) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+}

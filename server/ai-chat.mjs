@@ -272,7 +272,9 @@ export class AiChatService {
         `AI chat thread '${threadId}' has a running turn`,
       );
     }
-    this.#validateTurnInput(input);
+    // Composer-turn payloads carry a document instead of a message string and
+    // are validated in #prepareComposerTurn.
+    if (input?.contractVersion !== "composer.v1") this.#validateTurnInput(input);
     if (thread.sandbox === "danger-full-access" && input.dangerFullAccessConfirmed !== true) {
       throw new ApiError(
         400,
