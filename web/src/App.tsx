@@ -51,6 +51,7 @@ import {
   assigneeTargetForActor,
 } from "./actors";
 import { BoardColumn } from "./components/BoardColumn";
+import { randomUUID } from "./uuid";
 import type { AiChatOpenThreadRequest } from "./components/AiChat";
 import {
   BoardCardDisplayMenu,
@@ -1230,7 +1231,7 @@ export function App() {
     automationId?: string,
   ): Promise<AutomationHostResponse> => {
     const response = await postAutomationRequest({
-      requestId: window.crypto.randomUUID(),
+      requestId: randomUUID(),
       operation,
       taskboardProjectId: context.taskboardProjectId,
       codexProjectId: context.codexProjectId,
@@ -3098,7 +3099,7 @@ export function App() {
       setActionError(["请输入项目名称", "Enter a project name"]);
       return;
     }
-    const projectId = `temp-${window.crypto.randomUUID()}`;
+    const projectId = `temp-${randomUUID()}`;
     setOpeningProjectId(projectId);
     setActionError(null);
     try {

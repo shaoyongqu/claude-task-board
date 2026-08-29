@@ -7,6 +7,7 @@ import {
   type MouseEvent,
 } from "react";
 import { taskboardStorage } from "../storage";
+import { randomUUID } from "../uuid";
 import {
   ApiError,
   attachmentDownloadUrl,
@@ -609,7 +610,7 @@ export function TaskDetail({
       return;
     }
 
-    const requestId = crypto.randomUUID();
+    const requestId = randomUUID();
     const rect = input.getBoundingClientRect();
     function receiveDate(event: MessageEvent) {
       if (event.source !== window.parent || event.data?.type !== "taskboard:date-picker-response") return;

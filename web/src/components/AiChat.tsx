@@ -12,6 +12,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import { randomUUID } from "../uuid";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { taskboardStorage } from "../storage";
@@ -1961,7 +1962,7 @@ export function AiChat({
         : node.label;
       content.append(tokenElement, editor.ownerDocument.createTextNode("\u200B"));
       nextTokens.push({
-        key: crypto.randomUUID(),
+        key: randomUUID(),
         candidateRef: node.type === "unsupportedReference"
           ? node.referenceUri
           : node.type === "persistedReference"
@@ -2294,7 +2295,7 @@ export function AiChat({
       tokenElement.title = reference.label;
       content.append(tokenElement, editor.ownerDocument.createTextNode("\u200B"));
       newTokens.push({
-        key: crypto.randomUUID(),
+        key: randomUUID(),
         candidateRef: reference.stableId,
         label: reference.label,
         kind: reference.kind,
@@ -2360,7 +2361,7 @@ export function AiChat({
     editor.ownerDocument.getSelection()?.removeAllRanges();
     editor.ownerDocument.getSelection()?.addRange(range);
     setComposerSkillTokens((current) => [...current, {
-      key: crypto.randomUUID(),
+      key: randomUUID(),
       candidateRef: skillNode.candidateRef,
       label: skillNode.label,
       kind: "skill",
@@ -2407,7 +2408,7 @@ export function AiChat({
     editor.ownerDocument.getSelection()?.removeAllRanges();
     editor.ownerDocument.getSelection()?.addRange(range);
     setComposerSkillTokens((current) => [...current, {
-      key: crypto.randomUUID(),
+      key: randomUUID(),
       candidateRef: agentNode.candidateRef,
       label: agentNode.label,
       kind: "agent",

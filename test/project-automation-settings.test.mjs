@@ -51,7 +51,7 @@ test("automation requests use the exact local scheduler contract", () => {
   assert.match(appSource, /intervalMinutes: options\.intervalMinutes/);
   assert.match(appSource, /model: options\.model/);
   assert.match(appSource, /reasoningEffort: options\.reasoningEffort/);
-  assert.match(appSource, /requestId: window\.crypto\.randomUUID\(\)/);
+  assert.match(appSource, /requestId: randomUUID\(\)/);
   assert.doesNotMatch(appSource, /taskboard:automation-response/);
   assert.doesNotMatch(appSource, /pendingAutomationRequestsRef/);
 });
