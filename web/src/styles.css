@@ -11857,3 +11857,58 @@ kbd {
   .dashboard-metric { border-left: 0; border-top: var(--border-hairline) solid var(--border); }
   .dashboard-metric:first-child { border-top: 0; }
 }
+
+.project-dialog-actions-row {
+  display: flex;
+  gap: 6px;
+}
+
+.workspace-browser {
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  max-height: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.workspace-browser-current {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.workspace-browser-current code {
+  font-size: 10px;
+  word-break: break-all;
+}
+
+.workspace-browser-list {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  max-height: 150px;
+}
+
+.workspace-browser-entry {
+  text-align: left;
+  padding: 4px 6px;
+  border: 0;
+  background: transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-primary);
+}
+
+.workspace-browser-entry:hover {
+  background: var(--surface-active);
+}
+
+.workspace-browser-status {
+  font-size: 11px;
+  opacity: 0.7;
+}

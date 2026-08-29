@@ -32,6 +32,7 @@ import {
   listArchivedTasks,
   listDevelopmentContexts,
   listDeviceWorkspaces,
+  listLocalDirectories,
   listProjects,
   listTasks,
   moveTask as moveTaskRequest,
@@ -45,6 +46,7 @@ import {
   syncJiraConnection,
   uploadAttachment,
   updateTask as updateTaskRequest,
+  type DirectoryListing,
 } from "./api";
 import {
   actorKey,
@@ -501,6 +503,15 @@ function pathIsAbsolute(value: string): boolean {
   return value.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(value) || value.startsWith("\\\\");
 }
 
+function sanitizeWorkspaceSegment(value: string): string {
+  const segment = value
+    .replace(/[\\/:*?"<>|]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\.+$/, "");
+  return segment || "project";
+}
+
 function intervalMinutesFromRrule(value: string): AutomationIntervalMinutes | null {
   const match = /^RRULE:FREQ=MINUTELY;INTERVAL=(5|10|15|30|60)$/.exec(value);
   return match ? Number(match[1]) as AutomationIntervalMinutes : null;
@@ -772,6 +783,7 @@ export function App() {
   const [projectCreateOpen, setProjectCreateOpen] = useState(false);
   const [projectName, setProjectName] = useState("");
   const [projectWorkspaceDraft, setProjectWorkspaceDraft] = useState("");
+  const [projectWorkspaceTouched, setProjectWorkspaceTouched] = useState(false);
   const [jiraDialogOpen, setJiraDialogOpen] = useState(false);
   const [jiraConnection, setJiraConnection] = useState<JiraConnection | null>(null);
   const [jiraSaving, setJiraSaving] = useState(false);
@@ -783,6 +795,10 @@ export function App() {
   const [pendingWorkspaceProject, setPendingWorkspaceProject] = useState<ProjectChoice | null>(null);
   const [workspaceDraft, setWorkspaceDraft] = useState("");
   const [savingWorkspace, setSavingWorkspace] = useState(false);
+  const [workspaceBrowserOpen, setWorkspaceBrowserOpen] = useState(false);
+  const [browseListing, setBrowseListing] = useState<DirectoryListing | null>(null);
+  const [browseLoading, setBrowseLoading] = useState(false);
+  const [browseError, setBrowseError] = useState<string | null>(null);
   const [deviceWorkspacePaths, setDeviceWorkspacePaths] = useState(readDeviceWorkspacePaths);
   const [projectCodexIdentities, setProjectCodexIdentities] = useState(readProjectCodexIdentities);
   const [projectAutomations, setProjectAutomations] = useState(readProjectAutomations);
@@ -2794,7 +2810,10 @@ export function App() {
       ));
       return;
     }
-    window.location.assign(`codex://threads/${encodeURIComponent(binding.threadId.trim())}`);
+    void copyText(
+      `claude --resume ${binding.threadId.trim()}`,
+      text("Claude Code 恢复命令已复制，请在终端中运行。", "Claude Code resume command copied. Run it in a terminal."),
+    );
   }
 
   function openLegacyLocalThread(threadId: string) {
@@ -3001,6 +3020,8 @@ export function App() {
     setProjectContextMenu(null);
     setProjectName("");
     setProjectWorkspaceDraft("");
+    setProjectWorkspaceTouched(false);
+    setWorkspaceBrowserOpen(false);
     setActionError(null);
     setProjectCreateOpen(true);
   }
@@ -3011,6 +3032,16 @@ export function App() {
     setActionError(null);
   }
 
+  const suggestedCreateWorkspace = useMemo(() => {
+    const root = taskboardMetadata?.defaultWorkspaceRoot;
+    if (!root) return "";
+    const separator = root.includes("\\") ? "\\" : "/";
+    return `${root.replace(/[\\/]+$/, "")}${separator}${sanitizeWorkspaceSegment(projectName)}`;
+  }, [projectName, taskboardMetadata?.defaultWorkspaceRoot]);
+  const effectiveCreateWorkspace = projectWorkspaceTouched
+    ? projectWorkspaceDraft.trim()
+    : suggestedCreateWorkspace;
+
   async function createTemporaryProject() {
     if (openingProjectId) return;
     const name = projectName.trim();
@@ -3018,8 +3049,12 @@ export function App() {
       setActionError(["请输入项目名称", "Enter a project name"]);
       return;
     }
-    const workspacePath = projectWorkspaceDraft.trim();
-    if (workspacePath && !pathIsAbsolute(workspacePath)) {
+    const workspacePath = effectiveCreateWorkspace;
+    if (!workspacePath) {
+      setActionError(["没有可用的默认工作目录，请手动填写", "No default workspace available; enter one manually"]);
+      return;
+    }
+    if (!pathIsAbsolute(workspacePath)) {
       setActionError(["工作目录必须是绝对路径", "The workspace path must be an absolute path"]);
       return;
     }
@@ -3030,7 +3065,7 @@ export function App() {
       const project = await createProjectRequest({
         id: projectId,
         name,
-        workspacePath: workspacePath || null,
+        workspacePath,
       });
       setProjects((current) => [...current, project]);
       setProjectCreateOpen(false);
@@ -3054,7 +3089,93 @@ export function App() {
     setProjectContextMenu(null);
     setWorkspaceDraft(projects.find((candidate) => candidate.id === project.id)?.workspacePath ?? "");
     setActionError(null);
+    setWorkspaceBrowserOpen(false);
     setPendingWorkspaceProject(project);
+  }
+
+  async function openWorkspaceBrowser(initialPath: string) {
+    setWorkspaceBrowserOpen(true);
+    setBrowseError(null);
+    setBrowseLoading(true);
+    try {
+      setBrowseListing(await listLocalDirectories(initialPath));
+    } catch (error) {
+      setBrowseListing(null);
+      setBrowseError(errorMessage(error));
+    } finally {
+      setBrowseLoading(false);
+    }
+  }
+
+  async function navigateWorkspaceBrowser(targetPath: string | null) {
+    if (!targetPath) return;
+    setBrowseLoading(true);
+    setBrowseError(null);
+    try {
+      setBrowseListing(await listLocalDirectories(targetPath));
+    } catch (error) {
+      setBrowseError(errorMessage(error));
+    } finally {
+      setBrowseLoading(false);
+    }
+  }
+
+  function renderWorkspaceBrowserPanel(onPick: (pickedPath: string) => void) {
+    if (!workspaceBrowserOpen) return null;
+    return (
+      <div className="workspace-browser" role="region" aria-label={text("浏览目录", "Browse directories")}>
+        {browseLoading && <p className="workspace-browser-status">{text("读取中…", "Loading…")}</p>}
+        {!browseLoading && browseError && <p className="project-dialog-error">{browseError}</p>}
+        {!browseLoading && browseListing && (
+          <>
+            <div className="workspace-browser-current">
+              <code>{browseListing.path}</code>
+              <button
+                className="button primary"
+                type="button"
+                onClick={() => onPick(browseListing.path)}
+              >
+                {text("使用此目录", "Use this directory")}
+              </button>
+            </div>
+            <div className="workspace-browser-list">
+              {browseListing.parent !== null && (
+                <button
+                  className="workspace-browser-entry"
+                  type="button"
+                  onClick={() => void navigateWorkspaceBrowser(browseListing.parent)}
+                >
+                  <span aria-hidden="true">↰ </span>{text("上一级", "Up one level")}
+                </button>
+              )}
+              {browseListing.drives?.map((drive) => (
+                <button
+                  key={drive}
+                  className="workspace-browser-entry"
+                  type="button"
+                  onClick={() => void navigateWorkspaceBrowser(drive)}
+                >
+                  <span aria-hidden="true">💽 </span>{drive}
+                </button>
+              ))}
+              {browseListing.directories.map((entry) => (
+                <button
+                  key={entry.path}
+                  className="workspace-browser-entry"
+                  type="button"
+                  onClick={() => void navigateWorkspaceBrowser(entry.path)}
+                >
+                  <span aria-hidden="true">📁 </span>{entry.name}
+                </button>
+              ))}
+              {browseListing.directories.length === 0 && (
+                <p className="workspace-browser-status">{text("没有子目录", "No subdirectories")}</p>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    );
   }
 
   function closeWorkspaceDialog() {
@@ -3804,6 +3925,19 @@ export function App() {
                 onChange={(event) => setWorkspaceDraft(event.target.value)}
               />
             </label>
+            <div className="project-dialog-actions-row">
+              <button
+                className="button secondary"
+                type="button"
+                onClick={() => void openWorkspaceBrowser(workspaceDraft || "")}
+              >
+                {text("浏览…", "Browse…")}
+              </button>
+            </div>
+            {renderWorkspaceBrowserPanel((pickedPath) => {
+              setWorkspaceDraft(pickedPath);
+              setWorkspaceBrowserOpen(false);
+            })}
             {actionErrorText && <p className="project-dialog-error">{actionErrorText}</p>}
             <div>
               <button
@@ -3865,14 +3999,33 @@ export function App() {
               />
             </label>
             <label>
-              <span>{text("工作目录（可选，AI 会话和自动认领在此目录工作）", "Workspace directory (optional; AI sessions and auto-claim run here)")}</span>
+              <span>{text("工作目录（AI 会话和自动认领在此目录工作）", "Workspace directory (AI sessions and auto-claim run here)")}</span>
               <input
                 maxLength={4096}
                 placeholder={text("例如 D:\\projects\\my-repo", "e.g. /home/me/my-repo")}
-                value={projectWorkspaceDraft}
-                onChange={(event) => setProjectWorkspaceDraft(event.target.value)}
+                value={projectWorkspaceTouched ? projectWorkspaceDraft : suggestedCreateWorkspace}
+                onChange={(event) => {
+                  setProjectWorkspaceDraft(event.target.value);
+                  setProjectWorkspaceTouched(true);
+                }}
               />
             </label>
+            <div className="project-dialog-actions-row">
+              <button
+                className="button secondary"
+                type="button"
+                onClick={() => void openWorkspaceBrowser(
+                  (projectWorkspaceTouched ? projectWorkspaceDraft : suggestedCreateWorkspace) || "",
+                )}
+              >
+                {text("浏览…", "Browse…")}
+              </button>
+            </div>
+            {renderWorkspaceBrowserPanel((pickedPath) => {
+              setProjectWorkspaceDraft(pickedPath);
+              setProjectWorkspaceTouched(true);
+              setWorkspaceBrowserOpen(false);
+            })}
             {actionErrorText && <p className="project-dialog-error">{actionErrorText}</p>}
             <div>
               <button

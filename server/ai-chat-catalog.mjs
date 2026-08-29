@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { open, readFile, readdir, realpath, stat } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, realpath, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import yaml from "js-yaml";
@@ -75,6 +75,46 @@ export function claudeHomeDirectory(env = process.env) {
     return env.CLAUDE_CONFIG_DIR.trim();
   }
   return path.join(os.homedir(), ".claude");
+}
+
+const GLOBAL_PROJECT_ID = "local";
+const TEMP_TASKS_WORKSPACE_DIR = "temp-tasks";
+
+// PC-wide default root for project workspaces. Every board project without an
+// explicit workspace works inside its own subdirectory here; the global
+// "temporary tasks" project uses a dedicated sibling directory.
+export function defaultWorkspaceRoot(env = process.env, home = os.homedir()) {
+  const configured = env.CLAUDE_TASKBOARD_WORKSPACE_ROOT;
+  if (typeof configured === "string" && configured.trim()) {
+    return path.resolve(configured.trim());
+  }
+  return path.join(home, "Claude Task Board", "workspaces");
+}
+
+export function sanitizeWorkspaceSegment(value) {
+  const segment = String(value ?? "")
+    .replace(/[\\/:*?"<>|]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\.+$/, "");
+  return segment || "project";
+}
+
+export function defaultProjectWorkspacePath({
+  projectId,
+  projectName,
+  env = process.env,
+  home = os.homedir(),
+} = {}) {
+  const directory = projectId === GLOBAL_PROJECT_ID
+    ? TEMP_TASKS_WORKSPACE_DIR
+    : sanitizeWorkspaceSegment(projectName || projectId);
+  return path.join(defaultWorkspaceRoot(env, home), directory);
+}
+
+export async function ensureWorkspaceDirectory(directory) {
+  await mkdir(directory, { recursive: true });
+  return directory;
 }
 
 function parseFrontmatter(source) {
@@ -335,6 +375,16 @@ function resolvedWorkspace(projectId, project, workspaces) {
 export async function resolveAiWorkspace(projectId, claudeHome, database) {
   const project = await database.getProject(projectId);
   const workspaces = await loadDeviceWorkspaces(claudeHome, database);
+  if (project && !workspaces.has(projectId)) {
+    // Initial state / legacy project without a workspace: fall back to the
+    // PC-wide default directory so AI conversations keep working.
+    const fallback = defaultProjectWorkspacePath({
+      projectId: project.id,
+      projectName: project.name,
+    });
+    await ensureWorkspaceDirectory(fallback);
+    workspaces.set(projectId, fallback);
+  }
   return resolvedWorkspace(projectId, project, workspaces);
 }
 

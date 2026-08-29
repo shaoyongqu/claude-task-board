@@ -139,7 +139,7 @@ test("buildClaudeArgs maps sandbox modes and session identity to CLI flags", () 
   ]);
   assert.deepEqual(buildClaudeArgs({ ...base, sandbox: "workspace-write" }, [], null), [
     "--print", "--output-format", "stream-json", "--verbose",
-    "--permission-mode", "acceptEdits", "--allowedTools", "Bash",
+    "--permission-mode", "acceptEdits", "--allowedTools", "Bash", "WebSearch", "WebFetch",
     "-",
   ]);
   assert.deepEqual(buildClaudeArgs({ ...base, sandbox: "danger-full-access" }, [], null), [
@@ -155,7 +155,7 @@ test("buildClaudeArgs maps sandbox modes and session identity to CLI flags", () 
     claudeThreadId: "22222222-2222-2222-2222-222222222222",
   }, ["/extra"], "33333333-3333-3333-3333-333333333333"), [
     "--print", "--output-format", "stream-json", "--verbose",
-    "--permission-mode", "acceptEdits", "--allowedTools", "Bash",
+    "--permission-mode", "acceptEdits", "--allowedTools", "Bash", "WebSearch", "WebFetch",
     "--add-dir", "/extra",
     "--model", "opus",
     "--effort", "high",

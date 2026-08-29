@@ -22,7 +22,14 @@ import { withoutTaskboardLauncherEnvironment } from "../shared/taskboard-environ
 import { parseTaskboardAutomationHostRequest } from "../shared/taskboard-automation.mjs";
 import { LocalAutomationScheduler } from "./automation-scheduler.mjs";
 import { AiChatService } from "./ai-chat.mjs";
-import { configuredModels, resolveAiWorkspace, resolveMappedAiWorkspace } from "./ai-chat-catalog.mjs";
+import {
+  configuredModels,
+  defaultProjectWorkspacePath,
+  defaultWorkspaceRoot,
+  ensureWorkspaceDirectory,
+  resolveAiWorkspace,
+  resolveMappedAiWorkspace,
+} from "./ai-chat-catalog.mjs";
 import { decodeComposerReferenceKey } from "./composer-reference.mjs";
 import { createCloudConfigStore } from "./cloud-config.mjs";
 import {
@@ -1491,28 +1498,6 @@ async function findClaudeSessionFile(claudeHome, sessionId) {
   return null;
 }
 
-async function readClaudeSessionWorkspace(claudeHome, sessionId) {
-  const sessionPath = await findClaudeSessionFile(claudeHome, sessionId);
-  if (!sessionPath) return null;
-  try {
-    const handle = await open(sessionPath, "r");
-    try {
-      const buffer = Buffer.alloc(65_536);
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-      for (const line of buffer.toString("utf8", 0, bytesRead).split("\n")) {
-        if (!line.trim()) continue;
-        try {
-          const record = JSON.parse(line);
-          if (typeof record?.cwd === "string" && record.cwd.trim()) return record.cwd.trim();
-        } catch {}
-      }
-    } finally {
-      await handle.close();
-    }
-  } catch {}
-  return null;
-}
-
 async function readClaudeProjectWorkspaces(claudeHome) {
   const workspaces = {};
   for (const entry of await readClaudeSessionDirectory(claudeHome)) {
@@ -1552,12 +1537,8 @@ async function readClaudeProjectWorkspaces(claudeHome) {
   return workspaces;
 }
 
-async function resolveProjectWorkspace(project, claudeProjectId, claudeThreadId, claudeHome) {
+async function resolveProjectWorkspace(project) {
   if (project.workspacePath) return project.workspacePath;
-  if (claudeThreadId) {
-    const sessionWorkspace = await readClaudeSessionWorkspace(claudeHome, claudeThreadId);
-    if (sessionWorkspace) return sessionWorkspace;
-  }
   return null;
 }
 
@@ -1688,6 +1669,23 @@ export function createTaskboardServer(options = {}) {
   const database = new TaskboardDatabase(resolved.databasePath);
   const events = new EventHub();
   let clientStorageWrite = Promise.resolve();
+
+  // Initial state: every project must have a workspace, so backfill missing
+  // ones with the PC-wide default directories before the server accepts
+  // requests.
+  const workspaceBackfill = (async () => {
+    for (const project of database.listProjects()) {
+      if (project.workspacePath || project.id === JIRA_PROJECT_ID) continue;
+      const workspacePath = defaultProjectWorkspacePath({
+        projectId: project.id,
+        projectName: project.name,
+      });
+      try {
+        await ensureWorkspaceDirectory(workspacePath);
+        database.updateProjectWorkspace(project.id, workspacePath);
+      } catch {}
+    }
+  })();
 
   async function readClientStorage() {
     try {
@@ -2082,6 +2080,56 @@ export function createTaskboardServer(options = {}) {
         return methodNotAllowed(response, ["GET", "PATCH"]);
       }
 
+      if (pathname === "/api/local/directories") {
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        if ([...url.searchParams.keys()].some((key) => key !== "path")) {
+          throw new ApiError(400, "UNKNOWN_QUERY_PARAMETER", "Only 'path' is supported");
+        }
+        const requestedPath = url.searchParams.get("path")?.trim() || os.homedir();
+        if (!path.isAbsolute(requestedPath) || requestedPath.includes("\0")) {
+          throw new ApiError(400, "INVALID_FIELD", "'path' must be an absolute directory path");
+        }
+        let directoryStat = null;
+        let directory = path.resolve(requestedPath);
+        while (true) {
+          try {
+            directoryStat = await stat(directory);
+            break;
+          } catch {
+            const parent = path.dirname(directory);
+            if (parent === directory) break;
+            directory = parent;
+          }
+        }
+        if (!directoryStat?.isDirectory()) {
+          throw new ApiError(
+            409,
+            "WORKSPACE_NOT_FOUND",
+            `Directory '${requestedPath}' does not exist on this machine`,
+          );
+        }
+        let entries = [];
+        try {
+          entries = (await readdir(directory, { withFileTypes: true }))
+            .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+            .map((entry) => ({ name: entry.name, path: path.join(directory, entry.name) }))
+            .sort((left, right) => left.name.localeCompare(right.name));
+        } catch {}
+        const parent = path.dirname(directory);
+        const drives = process.platform === "win32"
+          ? (await Promise.all("ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map(async (letter) => {
+            const drive = `${letter}:\\`;
+            return (await stat(drive).catch(() => null))?.isDirectory() ? drive : null;
+          }))).filter(Boolean)
+          : [];
+        return sendJson(response, 200, {
+          path: directory,
+          parent: parent === directory ? null : parent,
+          ...(drives.length > 0 ? { drives } : {}),
+          directories: entries,
+        });
+      }
+
       if (pathname === "/api/local/automation") {
         if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
         const body = await readJson(request);
@@ -2243,7 +2291,10 @@ export function createTaskboardServer(options = {}) {
           throw new ApiError(400, "UNKNOWN_QUERY_PARAMETER", "GET /api/meta does not accept query parameters");
         }
         return sendJson(response, 200, {
-          ...(configuredTrustedOrigin ? {} : { manageTaskboardSkillPath: resolved.skillPath }),
+          ...(configuredTrustedOrigin ? {} : {
+            manageTaskboardSkillPath: resolved.skillPath,
+            defaultWorkspaceRoot: defaultWorkspaceRoot(codexProcessEnvironment),
+          }),
           capabilities: {
             localAiChat: !configuredTrustedOrigin
               && isLoopbackAddress(request.socket.remoteAddress),
@@ -2435,13 +2486,28 @@ export function createTaskboardServer(options = {}) {
           const projects = database.listProjects().map((project) => ({
             ...project,
             workspacePath: project.id === DEFAULT_PROJECT_ID
-              ? null
+              ? project.workspacePath
               : currentCloudConfig?.projectMappings[project.id] ?? project.workspacePath,
           }));
           return sendJson(response, 200, { projects });
         }
         if (request.method === "POST") {
-          const project = database.createProject(parseProjectCreate(await readJson(request)));
+          const input = parseProjectCreate(await readJson(request));
+          let workspacePath = input.workspacePath;
+          if (workspacePath === null || workspacePath === undefined) {
+            workspacePath = defaultProjectWorkspacePath({
+              projectId: input.id,
+              projectName: input.name,
+            });
+          } else if (!path.isAbsolute(workspacePath)) {
+            throw new ApiError(
+              400,
+              "INVALID_FIELD",
+              "'workspacePath' must be an absolute directory path",
+            );
+          }
+          await ensureWorkspaceDirectory(workspacePath);
+          const project = database.createProject({ ...input, workspacePath });
           events.emit("project.created", { project });
           return sendJson(response, 201, { project });
         }
@@ -2611,7 +2677,7 @@ export function createTaskboardServer(options = {}) {
       if (developmentContextsRoute) {
         if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
         const unknownQuery = [...url.searchParams.keys()].filter((key) => (
-          !["codexProjectId", "claudeThreadId", "workspacePath"].includes(key)
+          key !== "workspacePath"
         ));
         if (unknownQuery.length > 0) {
           throw new ApiError(400, "UNKNOWN_QUERY_PARAMETER", `Unknown query parameter: ${unknownQuery[0]}`);
@@ -2632,14 +2698,6 @@ export function createTaskboardServer(options = {}) {
           }
           : database.getProject(projectId);
         if (!project) throw new ApiError(404, "PROJECT_NOT_FOUND", `Project '${projectId}' does not exist`);
-        const codexProjectId = stringField(url.searchParams.get("codexProjectId") ?? null, "codexProjectId", {
-          nullable: true,
-          maxLength: 128,
-        });
-        const claudeThreadId = stringField(url.searchParams.get("claudeThreadId") ?? null, "claudeThreadId", {
-          nullable: true,
-          maxLength: 256,
-        });
         const deviceWorkspacePath = stringField(
           url.searchParams.get("workspacePath") ?? null,
           "workspacePath",
@@ -2648,12 +2706,7 @@ export function createTaskboardServer(options = {}) {
         if (deviceWorkspacePath?.includes("\0")) {
           throw new ApiError(400, "INVALID_FIELD", "'workspacePath' cannot contain null bytes");
         }
-        const workspacePath = deviceWorkspacePath ?? await resolveProjectWorkspace(
-          project,
-          codexProjectId,
-          claudeThreadId,
-          resolved.claudeHome,
-        );
+        const workspacePath = deviceWorkspacePath ?? await resolveProjectWorkspace(project);
         return sendJson(
           response,
           200,
@@ -3353,6 +3406,7 @@ export function createTaskboardServer(options = {}) {
     server,
     options: resolved,
     async listen({ host = "127.0.0.1", port = resolvePort(), fd = null } = {}) {
+      await workspaceBackfill;
       if (host !== "127.0.0.1" && host !== "0.0.0.0") {
         throw new Error("Taskboard server must bind to 127.0.0.1 or 0.0.0.0");
       }

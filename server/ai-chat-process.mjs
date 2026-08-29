@@ -260,7 +260,7 @@ export function buildClaudeArgs(thread, addDirectories = [], sessionId = null) {
   const permission = thread.sandbox === "read-only"
     ? ["--permission-mode", "plan"]
     : thread.sandbox === "workspace-write"
-      ? ["--permission-mode", "acceptEdits", "--allowedTools", "Bash"]
+      ? ["--permission-mode", "acceptEdits", "--allowedTools", "Bash", "WebSearch", "WebFetch"]
       : ["--dangerously-skip-permissions"];
   const args = [
     "--print",

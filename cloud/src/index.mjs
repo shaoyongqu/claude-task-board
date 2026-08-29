@@ -346,11 +346,11 @@ function parseThreadBinding(value) {
 
 function parseAssigneeTarget(value) {
   if (value === undefined) return undefined;
-  if (!["current-user", "codex-agent"].includes(value)) {
+  if (!["current-user", "claude-agent"].includes(value)) {
     throw new ApiError(
       400,
       "INVALID_FIELD",
-      "'assigneeTarget' must be current-user or codex-agent",
+      "'assigneeTarget' must be current-user or claude-agent",
     );
   }
   return value;
@@ -492,7 +492,7 @@ function unauthorized() {
   return json(
     401,
     { error: { code: "UNAUTHORIZED", message: "Valid Basic credentials are required" } },
-    { "www-authenticate": 'Basic realm="Codex Taskboard", charset="UTF-8"' },
+    { "www-authenticate": 'Basic realm="Claude Task Board", charset="UTF-8"' },
   );
 }
 
@@ -528,7 +528,7 @@ async function authenticate(request, env) {
     return {
       actor: {
         type: "agent",
-        id: `${userId}:codex-agent`,
+        id: `${userId}:claude-agent`,
         name: `Claude Agent (${username})`,
         avatarUrl: null,
         username,
@@ -553,7 +553,7 @@ function resolveAssignee(target, actor) {
   const userId = `basic:${encodeURIComponent(actor.username.toLowerCase())}`;
   return {
     type: "agent",
-    id: `${userId}:codex-agent`,
+    id: `${userId}:claude-agent`,
     name: `Claude Agent (${actor.username})`,
     avatarUrl: null,
   };
@@ -3082,7 +3082,7 @@ async function routeApi(request, env, actor, url) {
     throw new ApiError(
       409,
       "LOCAL_COMPANION_REQUIRED",
-      "This capability requires the local Codex companion",
+      "This capability requires the local companion",
     );
   }
 

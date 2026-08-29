@@ -3286,7 +3286,7 @@ export function AiChat({
                     <header>
                       <span>{text("应如何批准 Claude 操作？", "How should Claude operations be approved?")}</span>
                       <a
-                        href="https://developers.openai.com/codex/security"
+                        href="https://code.claude.com/docs/en/iam#permission-modes"
                         target="_blank"
                         rel="noreferrer"
                       >

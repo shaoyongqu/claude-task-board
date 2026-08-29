@@ -146,6 +146,8 @@ export class LocalAutomationScheduler {
       "acceptEdits",
       "--allowedTools",
       "Bash",
+      "WebSearch",
+      "WebFetch",
       "--session-id",
       sessionId,
       "-",

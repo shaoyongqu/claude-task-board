@@ -492,6 +492,19 @@ export async function updateProjectWorkspace(
   return data.project;
 }
 
+export interface DirectoryListing {
+  path: string;
+  parent: string | null;
+  drives?: string[];
+  directories: Array<{ name: string; path: string }>;
+}
+
+export async function listLocalDirectories(directoryPath: string): Promise<DirectoryListing> {
+  return request<DirectoryListing>(
+    `/api/local/directories?path=${encodeURIComponent(directoryPath)}`,
+  );
+}
+
 export async function deleteProject(projectId: string): Promise<void> {
   await request(`/api/projects/${encodeURIComponent(projectId)}`, {
     method: "DELETE",

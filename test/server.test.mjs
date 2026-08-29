@@ -107,6 +107,7 @@ test("health and the default local project are available", async () => {
   assert.equal(metadata.response.status, 200);
   assert.deepEqual(metadata.body, {
     manageTaskboardSkillPath: skillPath,
+    defaultWorkspaceRoot: path.join(os.homedir(), "Claude Task Board", "workspaces"),
     capabilities: { localAiChat: true },
   });
 
@@ -115,7 +116,10 @@ test("health and the default local project are available", async () => {
   assert.equal(result.body.projects.length, 1);
   assert.equal(result.body.projects[0].id, "local");
   assert.equal(result.body.projects[0].name, "全局");
-  assert.equal(result.body.projects[0].workspacePath, null);
+  assert.equal(
+    result.body.projects[0].workspacePath,
+    path.join(os.homedir(), "Claude Task Board", "workspaces", "temp-tasks"),
+  );
   assert.equal(result.body.projects[0].issueCount, 0);
 });
 
@@ -367,26 +371,12 @@ test("task thread migration excludes comment-only aggregate entries", async () =
   assert.equal(comments.body.comments[0].threadId, "thread-comment-only");
 });
 
-test("development context scan resolves the current Claude Code session workspace", async () => {
-  let expectedWorkspace;
-  const sessionId = "019f7f96-287b-7da0-bc7f-ffe03af85cc8";
-  const baseUrl = await startServer(async (directory) => {
-    expectedWorkspace = directory;
-    const claudeHome = path.join(directory, "claude-home");
-    const sessionDirectory = path.join(claudeHome, "projects", "test-project");
-    await mkdir(sessionDirectory, { recursive: true });
-    await writeFile(path.join(sessionDirectory, `${sessionId}.jsonl`), JSON.stringify({
-      type: "user",
-      cwd: directory,
-      sessionId,
-      timestamp: new Date().toISOString(),
-    }));
-    return { claudeHome };
-  });
-  const result = await request(
-    baseUrl,
-    "/api/projects/local/development-contexts?claudeThreadId=019f7f96-287b-7da0-bc7f-ffe03af85cc8",
+test("development context scan resolves the project workspace", async () => {
+  const expectedWorkspace = path.join(
+    os.homedir(), "Claude Task Board", "workspaces", "temp-tasks",
   );
+  const baseUrl = await startServer();
+  const result = await request(baseUrl, "/api/projects/local/development-contexts");
   assert.equal(result.response.status, 200);
   assert.equal(result.body.workspacePath, expectedWorkspace);
   assert.deepEqual(result.body.contexts, []);
@@ -547,6 +537,7 @@ test("trusted HTTPS origins do not inherit device-local capabilities from tunnel
   assert.equal(localMetadata.response.status, 200);
   assert.deepEqual(localMetadata.body, {
     manageTaskboardSkillPath: skillPath,
+    defaultWorkspaceRoot: path.join(os.homedir(), "Claude Task Board", "workspaces"),
     capabilities: { localAiChat: true },
     mode: "cloud",
     realtime: {

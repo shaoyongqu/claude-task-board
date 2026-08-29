@@ -104,7 +104,7 @@ test("WSL taskctl discovers the Windows launcher runtime descriptor from Windows
   let requestedUrl;
   const runtimeFile = path.join(
     "/windows/users/R&D Müller/AppData/Roaming",
-    "Codex Taskboard",
+    "Claude Task Board",
     "launcher-runtime.json",
   );
   const readPaths = [];

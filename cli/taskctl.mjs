@@ -1317,7 +1317,7 @@ async function resolveWslRuntimeFile(overrides) {
     );
     const appDataPath = appData.stdout.trim();
     return appDataPath
-      ? path.join(appDataPath, "Codex Taskboard", "launcher-runtime.json")
+      ? path.join(appDataPath, "Claude Task Board", "launcher-runtime.json")
       : undefined;
   } catch {
     return undefined;

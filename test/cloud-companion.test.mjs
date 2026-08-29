@@ -652,6 +652,7 @@ test("configured server proxies business APIs without touching local rows and ad
     const metadata = await fetch(`${baseUrl}/api/meta`).then((response) => response.json());
     assert.deepEqual(metadata, {
       capabilities: { localAiChat: true },
+      defaultWorkspaceRoot: path.join(os.homedir(), "Claude Task Board", "workspaces"),
       mode: "cloud",
       realtime: {
         transport: "websocket",

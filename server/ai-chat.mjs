@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -307,11 +307,18 @@ export class AiChatService {
     const model = this.#resolveModel(catalog, thread.model);
     this.#validateReasoningEffort(model, thread.reasoningEffort);
     if (resolved.workspacePath !== thread.origin.workspacePath) {
-      throw new ApiError(
-        409,
-        "PROJECT_WORKSPACE_CHANGED",
-        "The project's device workspace no longer matches this conversation",
-      );
+      // A thread bound to a workspace that no longer exists on disk adopts the
+      // project's current workspace instead of being stuck forever.
+      const previousExists = thread.origin.workspacePath
+        ? await stat(thread.origin.workspacePath).then(() => true, () => false)
+        : false;
+      if (previousExists) {
+        throw new ApiError(
+          409,
+          "PROJECT_WORKSPACE_CHANGED",
+          "The project's device workspace no longer matches this conversation",
+        );
+      }
     }
 
     const isComposerTurn = input?.contractVersion === "composer.v1";

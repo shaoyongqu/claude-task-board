@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -186,7 +186,7 @@ test("loopback AI API freezes server-owned origin and rejects injected execution
   }
 });
 
-test("non-local AI threads reject projects without an available workspace", async () => {
+test("project creation provisions the workspace directory", async () => {
   const fixture = await createServerFixture();
   try {
     const project = await request(fixture.baseUrl, "/api/projects", {
@@ -198,33 +198,30 @@ test("non-local AI threads reject projects without an available workspace", asyn
       },
     });
     assert.equal(project.response.status, 201);
+    const expectedWorkspace = await realpath(project.body.project.workspacePath);
 
     const created = await request(fixture.baseUrl, "/api/local/ai/threads", {
       method: "POST",
       body: { projectId: "missing-workspace" },
     });
-    assert.equal(created.response.status, 409);
-    assert.equal(created.body.error.code, "PROJECT_WORKSPACE_UNAVAILABLE");
+    assert.equal(created.response.status, 201);
+    assert.equal(created.body.thread.origin.workspacePath, expectedWorkspace);
   } finally {
     await fixture.close();
   }
 });
 
-test("non-local AI turns reject a workspace that became unavailable", async () => {
+test("AI turns adopt the default workspace when the bound one disappeared", async () => {
   const fixture = await createServerFixture();
   try {
-    const workspaceLink = path.join(fixture.directory, "project-workspace");
-    await symlink(
-      path.resolve(import.meta.dirname, ".."),
-      workspaceLink,
-      process.platform === "win32" ? "junction" : "dir",
-    );
+    const boundWorkspace = path.join(fixture.directory, "doomed-workspace");
+    await mkdir(boundWorkspace);
     const project = await request(fixture.baseUrl, "/api/projects", {
       method: "POST",
       body: {
         id: "disconnected-workspace",
         name: "Disconnected workspace",
-        workspacePath: workspaceLink,
+        workspacePath: boundWorkspace,
       },
     });
     assert.equal(project.response.status, 201);
@@ -235,23 +232,27 @@ test("non-local AI turns reject a workspace that became unavailable", async () =
     });
     assert.equal(created.response.status, 201);
     const threadId = created.body.thread.id;
-    await rm(workspaceLink);
+    await rm(boundWorkspace, { recursive: true, force: true });
 
     const turn = await request(fixture.baseUrl, `/api/local/ai/threads/${threadId}/turns`, {
       method: "POST",
       body: { message: "hello" },
     });
-    assert.equal(turn.response.status, 409);
-    assert.equal(turn.body.error.code, "PROJECT_WORKSPACE_UNAVAILABLE");
+    assert.equal(turn.response.status, 202);
 
+    for (let index = 0; index < 100; index += 1) {
+      const snapshot = await request(fixture.baseUrl, `/api/local/ai/threads/${threadId}`);
+      if (snapshot.body.runs[0]?.status !== "running") break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
     const snapshot = await request(fixture.baseUrl, `/api/local/ai/threads/${threadId}`);
-    assert.deepEqual(snapshot.body.runs, []);
+    assert.equal(snapshot.body.runs[0].status, "completed");
   } finally {
     await fixture.close();
   }
 });
 
-test("the local AI project falls back to the Taskboard workspace", async () => {
+test("the local AI project uses its default temp-tasks workspace", async () => {
   const fixture = await createServerFixture();
   try {
     await rm(path.join(fixture.claudeHome, "projects"), { recursive: true, force: true });
@@ -261,7 +262,10 @@ test("the local AI project falls back to the Taskboard workspace", async () => {
       body: { projectId: "local" },
     });
     assert.equal(created.response.status, 201);
-    assert.equal(created.body.thread.origin.workspacePath, path.resolve(import.meta.dirname, ".."));
+    assert.equal(
+      created.body.thread.origin.workspacePath,
+      path.join(os.homedir(), "Claude Task Board", "workspaces", "temp-tasks"),
+    );
   } finally {
     await fixture.close();
   }
