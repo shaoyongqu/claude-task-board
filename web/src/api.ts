@@ -478,6 +478,20 @@ export async function deleteProjectLabel(projectId: string, label: string): Prom
   return data.project;
 }
 
+export async function updateProjectWorkspace(
+  projectId: string,
+  workspacePath: string | null,
+): Promise<Project> {
+  const data = await request<{ project: Project }>(
+    `/api/projects/${encodeURIComponent(projectId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ workspacePath }),
+    },
+  );
+  return data.project;
+}
+
 export async function deleteProject(projectId: string): Promise<void> {
   await request(`/api/projects/${encodeURIComponent(projectId)}`, {
     method: "DELETE",

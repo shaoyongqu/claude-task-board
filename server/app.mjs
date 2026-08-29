@@ -2460,11 +2460,52 @@ export function createTaskboardServer(options = {}) {
           throw new ApiError(400, "INVALID_PATH", "Project id contains invalid encoding");
         }
         validateProjectId(projectId);
+        if (request.method === "PATCH") {
+          const body = await readJson(request);
+          assertPlainObject(body);
+          assertAllowedKeys(body, new Set(["workspacePath"]));
+          let workspacePath = body.workspacePath;
+          if (workspacePath === null || workspacePath === "") {
+            workspacePath = null;
+          } else {
+            workspacePath = stringField(workspacePath, "workspacePath", {
+              required: true,
+              maxLength: 4096,
+            });
+            if (!path.isAbsolute(workspacePath) || workspacePath.includes("\0")) {
+              throw new ApiError(
+                400,
+                "INVALID_FIELD",
+                "'workspacePath' must be an absolute directory path",
+              );
+            }
+            let workspaceStat;
+            try {
+              workspaceStat = await stat(workspacePath);
+            } catch {
+              throw new ApiError(
+                409,
+                "WORKSPACE_NOT_FOUND",
+                `Workspace directory '${workspacePath}' does not exist on this machine`,
+              );
+            }
+            if (!workspaceStat.isDirectory()) {
+              throw new ApiError(
+                409,
+                "WORKSPACE_NOT_A_DIRECTORY",
+                `Workspace '${workspacePath}' is not a directory`,
+              );
+            }
+          }
+          const project = database.updateProjectWorkspace(projectId, workspacePath);
+          events.emit("project.updated", { project });
+          return sendJson(response, 200, { project });
+        }
         if (request.method === "DELETE") {
           database.deleteProject(projectId);
           return sendEmpty(response, 204);
         }
-        return methodNotAllowed(response, ["DELETE"]);
+        return methodNotAllowed(response, ["PATCH", "DELETE"]);
       }
 
       const projectLabelsRoute = pathname.match(/^\/api\/projects\/([^/]+)\/labels$/);

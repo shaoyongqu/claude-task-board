@@ -23,6 +23,7 @@ import {
   deleteArchivedTask as deleteArchivedTaskRequest,
   deleteProjectLabel as deleteProjectLabelRequest,
   deleteProject as deleteProjectRequest,
+  updateProjectWorkspace as updateProjectWorkspaceRequest,
   getAiChatCatalog,
   getClaudeSessionProgress,
   getJiraConnection,
@@ -353,6 +354,7 @@ const EVENT_NAMES = [
   "attachment.created",
   "attachment.deleted",
   "project.created",
+  "project.updated",
   "project.labels.updated",
   "project.readme.updated",
 ] as const;
@@ -495,6 +497,10 @@ function isAutomationIntervalMinutes(value: unknown): value is AutomationInterva
   return value === 5 || value === 10 || value === 15 || value === 30 || value === 60;
 }
 
+function pathIsAbsolute(value: string): boolean {
+  return value.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(value) || value.startsWith("\\\\");
+}
+
 function intervalMinutesFromRrule(value: string): AutomationIntervalMinutes | null {
   const match = /^RRULE:FREQ=MINUTELY;INTERVAL=(5|10|15|30|60)$/.exec(value);
   return match ? Number(match[1]) as AutomationIntervalMinutes : null;
@@ -608,7 +614,7 @@ function LocalRealtimeSync({
           || !eventProjectId
           || eventProjectId === selectedProjectId
         );
-      if (event.type === "project.created") {
+      if (event.type === "project.created" || event.type === "project.updated") {
         scheduleRefresh({ projects: true });
         return;
       }
@@ -765,6 +771,7 @@ export function App() {
   const [projectContextMenu, setProjectContextMenu] = useState<ProjectContextMenuState | null>(null);
   const [projectCreateOpen, setProjectCreateOpen] = useState(false);
   const [projectName, setProjectName] = useState("");
+  const [projectWorkspaceDraft, setProjectWorkspaceDraft] = useState("");
   const [jiraDialogOpen, setJiraDialogOpen] = useState(false);
   const [jiraConnection, setJiraConnection] = useState<JiraConnection | null>(null);
   const [jiraSaving, setJiraSaving] = useState(false);
@@ -773,6 +780,9 @@ export function App() {
   const [pendingProjectDelete, setPendingProjectDelete] = useState<ProjectChoice | null>(null);
   const [projectDeleteIssueCount, setProjectDeleteIssueCount] = useState<number | null>(null);
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null);
+  const [pendingWorkspaceProject, setPendingWorkspaceProject] = useState<ProjectChoice | null>(null);
+  const [workspaceDraft, setWorkspaceDraft] = useState("");
+  const [savingWorkspace, setSavingWorkspace] = useState(false);
   const [deviceWorkspacePaths, setDeviceWorkspacePaths] = useState(readDeviceWorkspacePaths);
   const [projectCodexIdentities, setProjectCodexIdentities] = useState(readProjectCodexIdentities);
   const [projectAutomations, setProjectAutomations] = useState(readProjectAutomations);
@@ -987,8 +997,8 @@ export function App() {
 
     if (!workspacePath || !codexProjectId) {
       return { unavailableReason: text(
-        "请先为该项目设置工作目录",
-        "Set a workspace directory for this project first",
+        "请为该项目设置工作目录：在切换项目菜单中右键该项目 → 设置工作目录",
+        "Set a workspace for this project: right-click it in the project switcher menu → Set workspace",
       ) };
     }
     if (!manageTaskboardSkillPath) {
@@ -2990,6 +3000,7 @@ export function App() {
     setProjectMenuOpen(false);
     setProjectContextMenu(null);
     setProjectName("");
+    setProjectWorkspaceDraft("");
     setActionError(null);
     setProjectCreateOpen(true);
   }
@@ -3007,6 +3018,11 @@ export function App() {
       setActionError(["请输入项目名称", "Enter a project name"]);
       return;
     }
+    const workspacePath = projectWorkspaceDraft.trim();
+    if (workspacePath && !pathIsAbsolute(workspacePath)) {
+      setActionError(["工作目录必须是绝对路径", "The workspace path must be an absolute path"]);
+      return;
+    }
     const projectId = `temp-${randomUUID()}`;
     setOpeningProjectId(projectId);
     setActionError(null);
@@ -3014,7 +3030,7 @@ export function App() {
       const project = await createProjectRequest({
         id: projectId,
         name,
-        workspacePath: null,
+        workspacePath: workspacePath || null,
       });
       setProjects((current) => [...current, project]);
       setProjectCreateOpen(false);
@@ -3031,6 +3047,46 @@ export function App() {
     setProjectContextMenu(null);
     setProjectDeleteIssueCount(null);
     setPendingProjectDelete(project);
+  }
+
+  function requestProjectWorkspace(project: ProjectChoice) {
+    setProjectMenuOpen(false);
+    setProjectContextMenu(null);
+    setWorkspaceDraft(projects.find((candidate) => candidate.id === project.id)?.workspacePath ?? "");
+    setActionError(null);
+    setPendingWorkspaceProject(project);
+  }
+
+  function closeWorkspaceDialog() {
+    if (savingWorkspace) return;
+    setPendingWorkspaceProject(null);
+    setActionError(null);
+  }
+
+  async function saveProjectWorkspace() {
+    if (!pendingWorkspaceProject || savingWorkspace) return;
+    const workspacePath = workspaceDraft.trim();
+    if (workspacePath && !pathIsAbsolute(workspacePath)) {
+      setActionError(text("工作目录必须是绝对路径", "The workspace path must be an absolute path"));
+      return;
+    }
+    setSavingWorkspace(true);
+    setActionError(null);
+    try {
+      const project = await updateProjectWorkspaceRequest(
+        pendingWorkspaceProject.id,
+        workspacePath || null,
+      );
+      setProjects((current) => current.map((candidate) => (
+        candidate.id === project.id ? project : candidate
+      )));
+      setPendingWorkspaceProject(null);
+      setAnnouncement(text("工作目录已保存", "Workspace saved"));
+    } catch (error) {
+      setActionError(errorMessage(error));
+    } finally {
+      setSavingWorkspace(false);
+    }
   }
 
   function closeProjectDeleteDialog() {
@@ -3689,6 +3745,15 @@ export function App() {
           style={{ left: projectContextMenu.x, top: projectContextMenu.y }}
         >
           <button
+            className="context-menu-item"
+            type="button"
+            role="menuitem"
+            onClick={() => requestProjectWorkspace(projectContextMenu.project)}
+          >
+            <span className="context-menu-icon" aria-hidden="true"><LinearIcon name="folder" /></span>
+            <span className="context-menu-label">{text("设置工作目录…", "Set workspace…")}</span>
+          </button>
+          <button
             className="context-menu-item is-danger"
             type="button"
             role="menuitem"
@@ -3697,6 +3762,63 @@ export function App() {
             <span className="context-menu-icon" aria-hidden="true"><DeleteIcon color="currentColor" /></span>
             <span className="context-menu-label">{text("删除项目", "Delete project")}</span>
           </button>
+        </div>
+      )}
+
+      {pendingWorkspaceProject && (
+        <div
+          className="delete-backdrop"
+          onPointerDown={(event) => {
+            if (event.target === event.currentTarget) closeWorkspaceDialog();
+          }}
+        >
+          <form
+            className="delete-dialog project-create-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="project-workspace-title"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void saveProjectWorkspace();
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") closeWorkspaceDialog();
+            }}
+          >
+            <h2 id="project-workspace-title">
+              {text(
+                `设置“${pendingWorkspaceProject.name}”的工作目录`,
+                `Set the workspace for “${pendingWorkspaceProject.name}”`,
+              )}
+            </h2>
+            <label>
+              <span>{text("工作目录（AI 会话和自动认领在此目录工作）", "Workspace directory (AI sessions and auto-claim run here)")}</span>
+              <input
+                autoFocus
+                maxLength={4096}
+                placeholder={text(
+                  "例如 D:\\projects\\my-repo（留空则清除）",
+                  "e.g. /home/me/my-repo (leave empty to clear)",
+                )}
+                value={workspaceDraft}
+                onChange={(event) => setWorkspaceDraft(event.target.value)}
+              />
+            </label>
+            {actionErrorText && <p className="project-dialog-error">{actionErrorText}</p>}
+            <div>
+              <button
+                className="button secondary"
+                type="button"
+                disabled={savingWorkspace}
+                onClick={closeWorkspaceDialog}
+              >
+                {text("取消", "Cancel")}
+              </button>
+              <button className="button primary" type="submit" disabled={savingWorkspace}>
+                {savingWorkspace ? text("保存中…", "Saving…") : text("保存", "Save")}
+              </button>
+            </div>
+          </form>
         </div>
       )}
 
@@ -3740,6 +3862,15 @@ export function App() {
                 maxLength={120}
                 value={projectName}
                 onChange={(event) => setProjectName(event.target.value)}
+              />
+            </label>
+            <label>
+              <span>{text("工作目录（可选，AI 会话和自动认领在此目录工作）", "Workspace directory (optional; AI sessions and auto-claim run here)")}</span>
+              <input
+                maxLength={4096}
+                placeholder={text("例如 D:\\projects\\my-repo", "e.g. /home/me/my-repo")}
+                value={projectWorkspaceDraft}
+                onChange={(event) => setProjectWorkspaceDraft(event.target.value)}
               />
             </label>
             {actionErrorText && <p className="project-dialog-error">{actionErrorText}</p>}

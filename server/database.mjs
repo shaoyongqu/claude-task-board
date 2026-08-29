@@ -1340,6 +1340,17 @@ export class TaskboardDatabase {
     }
   }
 
+  updateProjectWorkspace(id, workspacePath) {
+    const project = this.getProject(id);
+    if (!project) {
+      throw new ApiError(404, "PROJECT_NOT_FOUND", `Project '${id}' does not exist`);
+    }
+    this.database.prepare(`
+      UPDATE projects SET workspace_path = ?, updated_at = ? WHERE id = ?
+    `).run(workspacePath, now(), id);
+    return this.getProject(id);
+  }
+
   deleteProject(id) {
     const project = this.getProject(id);
     if (!project) {
