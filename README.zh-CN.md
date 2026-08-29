@@ -42,6 +42,8 @@ npm run install:skill
 
 该命令把 `skills/manage-taskboard` 复制到 `~/.claude/skills/manage-taskboard`。技能会教 Claude Code：读取议题 → 用完整会话绑定认领（`todo` → `in_progress`）→ 实现 → 验证 → 移到 `in_review`；只有用户明确验收后才移到 `done`。
 
+完整的功能使用说明（界面、议题、AI 对话、自动化、CLI、协作、常见问题）见 **[使用手册](docs/user-guide.zh-CN.md)**。
+
 ## 使用 CLI
 
 ```bash
