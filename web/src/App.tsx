@@ -923,8 +923,11 @@ export function App() {
   const automationProjectContext = useMemo<Partial<CodexProjectIdentity> & {
     unavailableReason: string | null;
   }>(() => {
-    if (!embedded || window.parent === window) {
-      return { unavailableReason: text("仅可在嵌入宿主中使用", "Available only in an embedded host") };
+    if (!localAiChatAvailable) {
+      return { unavailableReason: text(
+        "自动认领通过本机 Claude Code 执行，请在运行看板服务的机器上用 http://127.0.0.1:47823 打开。",
+        "Auto-claim runs Claude Code on this machine. Open http://127.0.0.1:47823 on the machine running the board service.",
+      ) };
     }
     if (!isLocalTaskboardOrigin(new URL(document.baseURI).origin)) {
       return { unavailableReason: text("仅本地任务面板可用", "Available only on the local taskboard") };
@@ -1004,8 +1007,8 @@ export function App() {
     };
   }, [
     deviceWorkspacePaths,
-    embedded,
     hostContext,
+    localAiChatAvailable,
     manageTaskboardSkillPath,
     projectCodexIdentities,
     selectedProject,
