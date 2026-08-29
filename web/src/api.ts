@@ -498,6 +498,19 @@ export interface TerminalLaunchResult {
   command: string;
 }
 
+export interface NativePickerResult {
+  available: boolean;
+  path?: string;
+  canceled?: boolean;
+  reason?: string;
+}
+
+export async function pickNativeDirectory(): Promise<NativePickerResult> {
+  return request<NativePickerResult>("/api/local/directory-picker", {
+    method: "POST",
+  });
+}
+
 export async function launchTerminalSession(input: {
   workspacePath: string;
   sessionId?: string;

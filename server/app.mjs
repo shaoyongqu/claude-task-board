@@ -23,6 +23,8 @@ import { parseTaskboardAutomationHostRequest } from "../shared/taskboard-automat
 import { LocalAutomationScheduler } from "./automation-scheduler.mjs";
 import { SessionRegistry } from "./session-registry.mjs";
 import { launchTerminalSession } from "./terminal-launcher.mjs";
+import { pickNativeDirectory } from "./directory-picker.mjs";
+import { getQuotaStatus } from "./quota.mjs";
 import {
   installManageTaskboardSkill,
   isBoardManagedWorkspace,
@@ -1874,15 +1876,20 @@ export function createTaskboardServer(options = {}) {
     processEnv: codexProcessEnvironment,
     workspacePath: PROJECT_ROOT,
   });
+  // The scheduler spawns claude turns (which re-filter the env themselves)
+  // and also reads config vars like CLAUDE_TASKBOARD_QUOTA_COMMAND, so it
+  // gets the raw environment rather than the launcher-filtered one.
+  const rawSchedulerEnvironment = options.processEnv ?? process.env;
   const automationScheduler = new LocalAutomationScheduler({
     database,
     claudeExecutable: resolved.claudeExecutable,
     skillPath: resolved.skillPath,
-    processEnv: codexProcessEnvironment,
+    processEnv: rawSchedulerEnvironment,
     killGraceMs: 1_000,
   });
   const sessionRegistry = new SessionRegistry();
   let boardBaseUrl = null;
+  let directoryPickerInFlight = false;
   const aiEventResponses = new Set();
   const claudeSessionSearches = new Map();
   const claudeSessionStateCache = new Map();
@@ -2142,6 +2149,23 @@ export function createTaskboardServer(options = {}) {
         });
       }
 
+      if (pathname === "/api/local/directory-picker") {
+        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
+        await assertEmptyRequestBody(request, "POST /api/local/directory-picker");
+        // Only one native dialog at a time; the OS modal blocks its own request
+        // without touching the event loop.
+        if (directoryPickerInFlight) {
+          throw new ApiError(409, "PICKER_BUSY", "A directory picker is already open");
+        }
+        directoryPickerInFlight = true;
+        try {
+          const picked = await pickNativeDirectory();
+          return sendJson(response, 200, picked);
+        } finally {
+          directoryPickerInFlight = false;
+        }
+      }
+
       if (pathname === "/api/local/terminal-session") {
         if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
         const body = await readJson(request);
@@ -2183,6 +2207,14 @@ export function createTaskboardServer(options = {}) {
         const sessions = sessionRegistry.list()
           .filter((session) => !projectId || session.projectId === projectId);
         return sendJson(response, 200, { sessions });
+      }
+
+      if (pathname === "/api/local/quota") {
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        if ([...url.searchParams.keys()].length > 0) {
+          throw new ApiError(400, "UNKNOWN_QUERY_PARAMETER", "GET /api/local/quota does not accept query parameters");
+        }
+        return sendJson(response, 200, await getQuotaStatus(rawSchedulerEnvironment));
       }
 
       if (pathname === "/api/local/setup-status") {

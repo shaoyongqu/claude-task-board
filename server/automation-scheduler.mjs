@@ -8,6 +8,7 @@ import {
 } from "../shared/taskboard-automation.mjs";
 import { spawnClaudeTurn } from "./ai-chat-process.mjs";
 import { ApiError } from "./database.mjs";
+import { getQuotaStatus } from "./quota.mjs";
 
 // Replaces the Codex app-server automation cron: each enabled project gets a
 // local timer that spawns one headless `claude -p` controller turn per tick.
@@ -217,11 +218,12 @@ export class LocalAutomationScheduler {
     if (request.operation === "apply-policy") {
       const entry = this.#ensureEntry(request);
       const hasTodo = this.#hasTodo(request);
+      const quota = request.quotaAware ? await getQuotaStatus(this.processEnv) : null;
       const operation = taskboardAutomationPolicyOperation(request, {
         explicit: true,
         hasTodo,
-        previousQuotaState: "available",
-        quotaState: "available",
+        previousQuotaState: quota?.state ?? "available",
+        quotaState: quota?.state ?? "available",
         currentStatus: entry.timer ? "ACTIVE" : "PAUSED",
       });
       if (operation === "pause") {
@@ -232,6 +234,7 @@ export class LocalAutomationScheduler {
       return {
         item: this.#sanitizeItem(entry),
         policy: this.#policy(entry),
+        ...(quota ? { quota } : {}),
         ...(hasTodo ? {} : { pausedReason: "no-todo" }),
       };
     }

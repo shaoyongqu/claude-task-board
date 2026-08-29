@@ -34,6 +34,7 @@ import {
   listDeviceWorkspaces,
   listLocalDirectories,
   listLocalSessions,
+  pickNativeDirectory as pickNativeDirectoryRequest,
   launchTerminalSession as launchTerminalSessionRequest,
   getProjectIntegration,
   getSetupStatus,
@@ -877,6 +878,7 @@ export function App() {
   const [sessionsPanelOpen, setSessionsPanelOpen] = useState(false);
   const [localSessions, setLocalSessions] = useState<LocalSession[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [quotaStatus, setQuotaStatus] = useState<AutomationQuotaStatus | null>(null);
   const [browseListing, setBrowseListing] = useState<DirectoryListing | null>(null);
   const [browseLoading, setBrowseLoading] = useState(false);
   const [browseError, setBrowseError] = useState<string | null>(null);
@@ -1135,9 +1137,7 @@ export function App() {
       ...sortedChoices.filter((project) => project.issueCount === 0),
     ];
   }, [projectCodexIdentities, projects, recentProjectIds, text]);
-  const projectMenuCandidates = projectChoices.filter(
-    (project) => project.id !== GLOBAL_PROJECT_ID || project.issueCount > 0,
-  );
+  const projectMenuCandidates = projectChoices;
   const projectMenuNeedle = projectMenuSearch.trim().toLocaleLowerCase();
   const projectMenuChoices = projectMenuNeedle
     ? projectMenuCandidates.filter((project) => project.name.toLocaleLowerCase().includes(projectMenuNeedle))
@@ -1650,6 +1650,27 @@ export function App() {
     setAutomationError(null);
     void reconcileProjectAutomation();
   }, [selectedProjectId, reconcileProjectAutomation]);
+
+  useEffect(() => {
+    if (!localAiChatAvailable) return;
+    let disposed = false;
+    const apply = (data: { state: string; checkedAt: number; resetsAt?: string; reason?: string }) => {
+      const mapped = {
+        state: data.state as "available" | "blocked" | "unknown",
+        checkedAt: data.checkedAt,
+        ...(data.resetsAt ? { resetsAt: Number(new Date(data.resetsAt).getTime()) } : {}),
+        ...(["not-configured", "command-failed", "invalid-output"].includes(data.reason ?? "")
+          ? { reason: "api-key" as const }
+          : {}),
+      };
+      if (isAutomationQuotaStatus(mapped)) setQuotaStatus(mapped);
+    };
+    void fetch(resolveTaskboardUrl("/api/local/quota"))
+      .then((response) => response.json())
+      .then(apply)
+      .catch(() => {});
+    return () => { disposed = true; };
+  }, [localAiChatAvailable, selectedProjectId]);
 
   useEffect(() => {
     if (!localAiChatAvailable || integrationDialogOpen) return;
@@ -3089,6 +3110,21 @@ export function App() {
     setPendingWorkspaceProject(project);
   }
 
+  // Native OS folder picker (资源管理器), with the in-app directory browser
+  // as fallback when the platform has no picker command.
+  async function pickWorkspaceDirectory(onPick: (pickedPath: string) => void, initialPath: string) {
+    setActionError(null);
+    try {
+      const picked = await pickNativeDirectoryRequest();
+      if (picked.available && picked.path) {
+        onPick(picked.path);
+        return;
+      }
+      if (picked.available && picked.canceled) return;
+    } catch {}
+    await openWorkspaceBrowser(initialPath);
+  }
+
   async function openWorkspaceBrowser(initialPath: string) {
     setWorkspaceBrowserOpen(true);
     setBrowseError(null);
@@ -3419,7 +3455,9 @@ export function App() {
           <div className="header-actions">
             {selectedProject && (
               <ProjectAutomationMenu
-                automation={selectedProjectAutomation}
+                automation={selectedProjectAutomation
+                  ? { ...selectedProjectAutomation, quota: quotaStatus ?? selectedProjectAutomation.quota }
+                  : selectedProjectAutomation}
                 models={automationModels}
                 pending={automationPending || automationCatalogLoading}
                 error={automationCatalogError ?? automationError}
@@ -4090,7 +4128,10 @@ export function App() {
               <button
                 className="button secondary"
                 type="button"
-                onClick={() => void openWorkspaceBrowser(workspaceDraft || "")}
+                onClick={() => void pickWorkspaceDirectory(
+                  (picked) => { setWorkspaceDraft(picked); setWorkspaceBrowserOpen(false); },
+                  workspaceDraft || "",
+                )}
               >
                 {text("浏览…", "Browse…")}
               </button>
@@ -4175,7 +4216,12 @@ export function App() {
               <button
                 className="button secondary"
                 type="button"
-                onClick={() => void openWorkspaceBrowser(
+                onClick={() => void pickWorkspaceDirectory(
+                  (picked) => {
+                    setProjectWorkspaceDraft(picked);
+                    setProjectWorkspaceTouched(true);
+                    setWorkspaceBrowserOpen(false);
+                  },
                   (projectWorkspaceTouched ? projectWorkspaceDraft : suggestedCreateWorkspace) || "",
                 )}
               >

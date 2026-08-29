@@ -219,8 +219,8 @@ export function ProjectAutomationMenu({
           {quota?.state === "unavailable" && (
             quota.reason === "api-key"
               ? text(
-                "API Key 模式不支持读取额度",
-                "API key mode cannot read the usage quota.",
+                "未配置额度查询命令。设置环境变量 CLAUDE_TASKBOARD_QUOTA_COMMAND（如 ccswitch 的用量查询命令，需输出 JSON：{\"state\":\"available\"}）后重启看板。",
+                "No quota command configured. Set CLAUDE_TASKBOARD_QUOTA_COMMAND (e.g. a ccswitch usage command that prints JSON like {\"state\":\"available\"}) and restart the board.",
               )
               : text("当前账户无法读取额度", "This account cannot read quota information.")
           )}
