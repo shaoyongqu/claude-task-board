@@ -7,7 +7,6 @@ import {
   type MouseEvent,
 } from "react";
 import { taskboardStorage } from "../storage";
-import { randomUUID } from "../uuid";
 import {
   ApiError,
   attachmentDownloadUrl,
@@ -93,7 +92,6 @@ import {
 } from "./IssueRelations";
 import { TaskPropertyPicker } from "./TaskPropertyPicker";
 import { buildIssueUrl } from "../issueRoute";
-import { postEmbeddedHostMessage } from "../embeddedHost.mjs";
 import copyIdIcon from "../assets/figma-taskboard/copy-id.svg";
 import copyLinkIcon from "../assets/figma-taskboard/copy-link.svg";
 import { DescriptionDocument } from "./DescriptionDocument";
@@ -127,6 +125,7 @@ interface TaskDetailProps {
     origin?: IssueRelationOrigin,
   ) => Promise<RelationMutationResult>;
   onOpenThread: (binding: CodexThreadBinding) => void;
+  onOpenInTerminal: (threadId: string) => void;
   onOpenLegacyLocalThread: (threadId: string) => void;
   onOpenInThread: (task: Task) => void;
   onCopy: (text: string, announcement: string) => void;
@@ -177,18 +176,6 @@ function resizeTextarea(element: HTMLTextAreaElement | null) {
 }
 
 async function downloadAttachmentFile(attachment: Attachment) {
-  const host = new URL(document.baseURI).searchParams.get("host");
-  if (host === "codex" && window.parent !== window) {
-    postEmbeddedHostMessage({
-      type: "taskboard:open-attachment",
-      payload: {
-        attachmentId: attachment.id,
-        filename: attachment.filename,
-      },
-    });
-    return;
-  }
-
   const response = await fetch(resolveTaskboardUrl(attachmentDownloadUrl(attachment)));
   if (!response.ok) {
     throw new ApiError(response.status, await response.json().catch(() => ({})));
@@ -335,10 +322,12 @@ function ActivityChangeIcon({ field, before, after }: {
 function ConversationLink({
   threadId,
   onOpen,
+  onTerminal,
   onCopy,
 }: {
   threadId: string;
   onOpen: () => void;
+  onTerminal: () => void;
   onCopy: (text: string, announcement: string) => void;
 }) {
   const { text } = useTaskboardI18n();
@@ -352,6 +341,15 @@ function ConversationLink({
       >
         <ConversationIcon color="currentColor" size={16} />
         <strong>{text("查看对话", "View conversation")}</strong>
+      </button>
+      <button
+        className="issue-conversation-terminal"
+        type="button"
+        title={text("在终端中继续此 Claude Code 会话", "Continue this Claude Code session in a terminal")}
+        onClick={onTerminal}
+      >
+        <CodexResumeIcon />
+        <span>{text("在终端继续", "Continue in terminal")}</span>
       </button>
       <button
         className="issue-conversation-copy"
@@ -387,6 +385,7 @@ export function TaskDetail({
   onRemoveRelation,
   onOpenThread,
   onOpenLegacyLocalThread,
+  onOpenInTerminal,
   onOpenInThread,
   onCopy,
   openingThread,
@@ -605,35 +604,7 @@ export function TaskDetail({
     const input = event.currentTarget.querySelector("input");
     if (!input || input.disabled) return;
     event.preventDefault();
-    if (new URL(document.baseURI).searchParams.get("host") !== "codex" || window.parent === window) {
-      input.showPicker();
-      return;
-    }
-
-    const requestId = randomUUID();
-    const rect = input.getBoundingClientRect();
-    function receiveDate(event: MessageEvent) {
-      if (event.source !== window.parent || event.data?.type !== "taskboard:date-picker-response") return;
-      const payload = event.data.payload;
-      if (payload?.requestId !== requestId || typeof payload.value !== "string") return;
-      window.removeEventListener("message", receiveDate);
-      const value = payload.value || null;
-      void saveTask(
-        field === "startDate"
-          ? { startDate: value }
-          : { dueDate: value, ...(value ? {} : { recurrence: null }) },
-        field,
-      );
-    }
-    window.addEventListener("message", receiveDate);
-    postEmbeddedHostMessage({
-      type: "taskboard:date-picker-request",
-      payload: {
-        requestId,
-        value: input.value,
-        rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-      },
-    });
+    input.showPicker();
   }
 
   async function applyRelationMutation(
@@ -1184,6 +1155,9 @@ export function TaskDetail({
                       onOpen={() => currentTask.threadBinding
                         ? onOpenThread(currentTask.threadBinding)
                         : onOpenLegacyLocalThread(currentTask.legacyLocalThreadId!)}
+                      onTerminal={() => onOpenInTerminal(
+                        currentTask.threadBinding?.threadId ?? currentTask.legacyLocalThreadId!,
+                      )}
                       onCopy={onCopy}
                     />
                   </div>
@@ -1468,6 +1442,9 @@ export function TaskDetail({
                             onOpen={() => comment.threadBinding
                               ? onOpenThread(comment.threadBinding)
                               : onOpenLegacyLocalThread(comment.legacyLocalThreadId!)}
+                            onTerminal={() => onOpenInTerminal(
+                              comment.threadBinding?.threadId ?? comment.legacyLocalThreadId!,
+                            )}
                             onCopy={onCopy}
                           />
                         </div>

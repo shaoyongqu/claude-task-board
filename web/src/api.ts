@@ -492,6 +492,87 @@ export async function updateProjectWorkspace(
   return data.project;
 }
 
+export interface TerminalLaunchResult {
+  launched: boolean;
+  terminal: string | null;
+  command: string;
+}
+
+export async function launchTerminalSession(input: {
+  workspacePath: string;
+  sessionId?: string;
+  prompt?: string;
+}): Promise<TerminalLaunchResult> {
+  return request<TerminalLaunchResult>("/api/local/terminal-session", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export interface ProjectIntegrationStatus {
+  workspacePath: string;
+  mcp: boolean;
+  hooks: { sessionStart: boolean; sessionEnd: boolean; stop: boolean };
+  commands: { eTaskboard: boolean; taskboardStatus: boolean };
+  configured: boolean;
+}
+
+export async function getProjectIntegration(projectId: string): Promise<ProjectIntegrationStatus> {
+  return request<ProjectIntegrationStatus>(
+    `/api/local/projects/${encodeURIComponent(projectId)}/claude-integration`,
+  );
+}
+
+export async function setupProjectIntegration(projectId: string): Promise<{
+  wrote: string[];
+  status: ProjectIntegrationStatus;
+}> {
+  return request(`/api/local/projects/${encodeURIComponent(projectId)}/claude-integration`, {
+    method: "POST",
+  });
+}
+
+export async function removeProjectIntegration(projectId: string): Promise<{
+  removed: string[];
+  status: ProjectIntegrationStatus;
+}> {
+  return request(`/api/local/projects/${encodeURIComponent(projectId)}/claude-integration`, {
+    method: "DELETE",
+  });
+}
+
+export interface SetupStatus {
+  skillInstalled: boolean;
+  defaultWorkspaceRoot: string;
+  boardBaseUrl: string | null;
+}
+
+export async function getSetupStatus(): Promise<SetupStatus> {
+  return request<SetupStatus>("/api/local/setup-status");
+}
+
+export async function installSkill(): Promise<{ installed: boolean; path: string }> {
+  return request("/api/local/integration/skill", { method: "POST" });
+}
+
+export interface LocalSession {
+  sessionId: string;
+  cwd: string | null;
+  projectId: string | null;
+  projectName: string | null;
+  workspacePath: string | null;
+  startedAt: string;
+  lastSeenAt: string;
+  endedAt: null;
+  turnsCompleted: number;
+}
+
+export async function listLocalSessions(projectId?: string): Promise<LocalSession[]> {
+  const suffix = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
+  const data = await request<{ sessions: LocalSession[] }>(`/api/local/sessions${suffix}`);
+  return data.sessions;
+}
+
 export interface DirectoryListing {
   path: string;
   parent: string | null;

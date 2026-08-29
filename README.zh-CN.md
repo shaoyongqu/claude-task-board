@@ -53,6 +53,20 @@ npm run install:skill
 - **随时修改**：在切换项目菜单中右键项目 → "设置工作目录…"。
 - 可用 `CLAUDE_TASKBOARD_WORKSPACE_ROOT` 环境变量改写默认根目录。
 
+## Claude Code 深度集成
+
+看板与 Claude Code 通过原生机制互通（三条工作流）：
+
+1. **看板驱动**：议题 →「在新对话打开」（看板内无头 AI 对话）或「在终端继续」（`POST /api/local/terminal-session` 在系统终端打开交互式 `claude`，自动 `--resume` 绑定会话，Windows Terminal 优先、cmd 兜底、失败时复制命令）。
+2. **Claude 驱动**：项目工作区自动配置三件套（`server/claude-integration.mjs`，幂等、备份、可一键移除）——
+   - `.mcp.json` 注册 **MCP 服务器**（`server/mcp.mjs`，stdio JSON-RPC，8 个工具：issue_list/get/create/move、comment_add、project_list、context_current、project_readme_get），任意 `claude` 会话原生操作看板，写入自动归属到 hooks 上报的活跃会话；
+   - `.claude/settings.json` 注入 **hooks**（SessionStart/SessionEnd/Stop → `server/hooks-bridge.mjs` 上报），看板「本机会话」面板实时展示并支持绑定议题；
+   - `.claude/commands/e-taskboard.md` + `taskboard-status.md` 提供 **斜杠命令**（`/e-taskboard ISSUE-1` 一键派发）。
+   部署策略：默认根目录下的工作区自动配置；外部仓库通过项目右键 →「Claude 集成…」或首次运行横幅一键配置。绝不触碰全局 `~/.claude`（技能除外）。
+3. **自动认领**：本地调度器定期派生无头控制器会话处理依赖就绪的待办议题。
+
+注意：首次在配置了 `.mcp.json` 的工作区启动 claude 时会请求批准 MCP 服务器；可用 `claude mcp reset-project-choices` 重置。
+
 ## 使用 CLI
 
 ```bash

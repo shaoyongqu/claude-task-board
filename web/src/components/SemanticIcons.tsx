@@ -270,3 +270,13 @@ export function SendIcon({ color = "black", ...props }: BasicIconProps) {
     </SvgIcon>
   );
 }
+
+export function TerminalIcon(props: BasicIconProps) {
+  return (
+    <SvgIcon {...props} fill="none">
+      <path d="M2.5 4.5H13.5V11.5H2.5V4.5Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+      <path d="M4.5 7L6 8.5L4.5 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M7.5 10.5H11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </SvgIcon>
+  );
+}

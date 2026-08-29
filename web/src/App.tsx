@@ -33,6 +33,16 @@ import {
   listDevelopmentContexts,
   listDeviceWorkspaces,
   listLocalDirectories,
+  listLocalSessions,
+  launchTerminalSession as launchTerminalSessionRequest,
+  getProjectIntegration,
+  getSetupStatus,
+  installSkill as installSkillRequest,
+  removeProjectIntegration as removeProjectIntegrationRequest,
+  setupProjectIntegration as setupProjectIntegrationRequest,
+  type LocalSession,
+  type ProjectIntegrationStatus,
+  type SetupStatus,
   listProjects,
   listTasks,
   moveTask as moveTaskRequest,
@@ -89,17 +99,13 @@ import {
 } from "./components/TaskEditor";
 import { TaskFilterMenu } from "./components/TaskFilterMenu";
 import { taskboardStorage } from "./storage";
-import {
-  installEmbeddedExternalLinkHandler,
-  postEmbeddedHostMessage,
-  setEmbeddedFrameChallenge,
-} from "./embeddedHost.mjs";
 import { buildIssueUrl, readIssueIdentifier } from "./issueRoute";
 import {
   getTaskboardI18n,
   resolveTaskboardLanguage,
   taskStatusLabel,
   TaskboardLanguageProvider,
+  useTaskboardI18n,
 } from "./i18n";
 import {
   MAIN_STATUSES,
@@ -365,18 +371,89 @@ function isTheme(value: unknown): value is Theme {
   return value === "light" || value === "dark";
 }
 
+function LocalSessionsPanel({
+  sessions,
+  loading,
+  currentProjectId,
+  detailTask,
+  busy,
+  onBind,
+  onTerminal,
+  onClose,
+}: {
+  sessions: LocalSession[];
+  loading: boolean;
+  currentProjectId: string | null;
+  detailTask: Task | null;
+  busy: boolean;
+  onBind: (session: LocalSession) => void;
+  onTerminal: (session: LocalSession) => void;
+  onClose: () => void;
+}) {
+  const { text } = useTaskboardI18n();
+  return (
+    <div className="local-sessions-panel" role="dialog" aria-label={text("本机 Claude Code 会话", "Local Claude Code sessions")}>
+      <header>
+        <strong>{text("本机 Claude Code 会话", "Local Claude Code sessions")}</strong>
+        <button type="button" aria-label={text("关闭", "Close")} onClick={onClose}>
+          <LinearIcon name="close" />
+        </button>
+      </header>
+      <p className="local-sessions-hint">{text(
+        "由项目工作区内的 hooks 自动上报。绑定后，该会话的看板写入会归属到所选议题。",
+        "Reported automatically by hooks in project workspaces. After binding, board writes from that session are attributed to the selected issue.",
+      )}</p>
+      {loading && <p className="local-sessions-status">{text("读取中…", "Loading…")}</p>}
+      {!loading && sessions.length === 0 && (
+        <p className="local-sessions-status">{text(
+          "还没有会话上报。在配置了集成的项目工作区里启动 claude 后，会话会出现在这里。",
+          "No sessions reported yet. Start claude inside a workspace with integration configured and sessions will appear here.",
+        )}</p>
+      )}
+      <ul>
+        {sessions.map((session) => (
+          <li key={session.sessionId} className={session.endedAt ? "is-ended" : ""}>
+            <div className="local-session-main">
+              <strong>{session.projectName ?? text("未知项目", "Unknown project")}</strong>
+              <span className="local-session-meta">
+                {`${session.sessionId.slice(0, 8)} · ${text("回合", "turns")} ${session.turnsCompleted}`}
+                {session.endedAt ? ` · ${text("已结束", "ended")}` : ` · ${text("活跃", "active")}`}
+              </span>
+              <code>{session.cwd ?? ""}</code>
+            </div>
+            <div className="local-session-actions">
+              <button
+                className="button secondary"
+                type="button"
+                onClick={() => onTerminal(session)}
+              >
+                {text("终端打开", "Open in terminal")}
+              </button>
+              <button
+                className="button primary"
+                type="button"
+                disabled={busy || !detailTask || Boolean(session.endedAt) || !session.workspacePath
+                  || (currentProjectId !== null && session.projectId !== currentProjectId)}
+                title={detailTask
+                  ? text(`绑定到 ${detailTask.identifier}`, `Bind to ${detailTask.identifier}`)
+                  : text("先打开一个议题", "Open an issue first")}
+                onClick={() => onBind(session)}
+              >
+                {detailTask
+                  ? text(`绑定到 ${detailTask.identifier}`, `Bind to ${detailTask.identifier}`)
+                  : text("绑定议题", "Bind issue")}
+              </button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function getInitialTheme(): Theme {
-  const query = new URL(document.baseURI).searchParams;
-  const host = query.get("host");
-  if (
-    window.parent !== window
-    && (host === "codex" || host === "workbuddy" || host === "deepseek-harness")
-  ) {
-    const fromQuery = query.get("theme");
-    if (isTheme(fromQuery)) return fromQuery;
-    const stored = taskboardStorage.getItem("taskboard.theme");
-    if (isTheme(stored)) return stored;
-  }
+  const stored = taskboardStorage.getItem("taskboard.theme");
+  if (isTheme(stored)) return stored;
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
@@ -692,16 +769,12 @@ function LocalRealtimeSync({
 
 export function App() {
   const query = useMemo(() => new URL(document.baseURI).searchParams, []);
-  const host = query.get("host");
-  const embedded = host === "codex" || host === "workbuddy" || host === "deepseek-harness";
   const undoShortcut = navigator.userAgent.includes("Macintosh") ? "⌘Z" : "Ctrl+Z";
   const [theme, setTheme] = useState<Theme>(getInitialTheme);
-  const [hostContext, setHostContext] = useState<HostContext | null>(null);
   const language = resolveTaskboardLanguage(
-    hostContext?.language ?? query.get("lang") ?? navigator.language,
+    query.get("lang") ?? navigator.language,
   );
   const { locale, text } = getTaskboardI18n(language);
-  const [embeddedFrameChallenge, setEmbeddedFrameChallengeState] = useState("");
   const [developmentScan, setDevelopmentScan] = useState<DevelopmentScan>({ workspacePath: null, contexts: [] });
   const [developmentScanLoading, setDevelopmentScanLoading] = useState(false);
   const [manageTaskboardSkillPath, setManageTaskboardSkillPath] = useState("");
@@ -796,6 +869,14 @@ export function App() {
   const [workspaceDraft, setWorkspaceDraft] = useState("");
   const [savingWorkspace, setSavingWorkspace] = useState(false);
   const [workspaceBrowserOpen, setWorkspaceBrowserOpen] = useState(false);
+  const [integrationDialogOpen, setIntegrationDialogOpen] = useState(false);
+  const [integrationStatus, setIntegrationStatus] = useState<ProjectIntegrationStatus | null>(null);
+  const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null);
+  const [integrationBusy, setIntegrationBusy] = useState(false);
+  const [setupBannerDismissed, setSetupBannerDismissed] = useState(false);
+  const [sessionsPanelOpen, setSessionsPanelOpen] = useState(false);
+  const [localSessions, setLocalSessions] = useState<LocalSession[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
   const [browseListing, setBrowseListing] = useState<DirectoryListing | null>(null);
   const [browseLoading, setBrowseLoading] = useState(false);
   const [browseError, setBrowseError] = useState<string | null>(null);
@@ -818,7 +899,6 @@ export function App() {
   const undoSequenceRef = useRef(0);
   const undoStackRef = useRef<UndoOperation[]>([]);
   const undoInFlightRef = useRef(false);
-  const dragRegionRef = useRef<HTMLDivElement>(null);
   const issueListRef = useRef<HTMLDivElement>(null);
   const boardColumnScrollRefs = useRef<Partial<Record<TaskStatus, HTMLDivElement | null>>>({});
   const detailSourceProjectIdRef = useRef<string | null>(null);
@@ -938,7 +1018,7 @@ export function App() {
   useLayoutEffect(() => {
     if (selectedProject) rememberProjectOpen(selectedProject.id);
   }, [rememberProjectOpen, selectedProject]);
-  const currentUser = hostContext?.user ?? {
+  const currentUser = {
     ...DEFAULT_USER_ACTOR,
     name: text("本地用户", "Local user"),
   };
@@ -962,56 +1042,9 @@ export function App() {
       return { unavailableReason: text("请先选择项目", "Select a project first") };
     }
 
-    const savedIdentity = projectCodexIdentities[selectedProject.id];
-    if (savedIdentity?.codexProjectKind === "remote") {
-      const liveProject = hostContext?.projects?.find(
-        (project) => project.id === savedIdentity.codexProjectId,
-      );
-      if (
-        liveProject?.projectKind !== "remote"
-        || liveProject.hostId !== savedIdentity.codexHostId
-        || liveProject.workspacePath !== savedIdentity.workspacePath
-      ) {
-        return { unavailableReason: text(
-          "已保存的 SSH 远程项目或主机当前不可用",
-          "The saved SSH remote project or host is not available",
-        ) };
-      }
-      if (!manageTaskboardSkillPath) {
-        return { unavailableReason: text(
-          "任务面板还没有读取到 Skill 路径",
-          "Taskboard has not received the Skill path",
-        ) };
-      }
-      return { ...savedIdentity, unavailableReason: null };
-    }
-
-    const effectiveCodexProjectId = selectedProject.id === GLOBAL_PROJECT_ID
-      ? hostContext?.projectId
-      : selectedProject.id;
-    const directCodexProject = hostContext?.projects?.find(
-      (project) => project.id === effectiveCodexProjectId,
-    );
-    const workspacePath = (
-      directCodexProject?.projectKind === "remote"
-        ? directCodexProject.workspacePath
-        : undefined
-    )
-      ?? deviceWorkspacePaths[selectedProject.id]
-      ?? selectedProject.workspacePath
-      ?? directCodexProject?.workspacePath
-      ?? (
-        directCodexProject && hostContext?.projectId === effectiveCodexProjectId
-          ? hostContext?.workspacePath
-          : undefined
-      );
-    const codexProjectId = directCodexProject
-      ? directCodexProject.id
-      : hostContext?.projects?.find(
-        (project) => (deviceWorkspacePaths[project.id] ?? project.workspacePath) === workspacePath,
-      )?.id ?? workspacePath;
-
-    if (!workspacePath || !codexProjectId) {
+    const workspacePath = deviceWorkspacePaths[selectedProject.id]
+      ?? selectedProject.workspacePath;
+    if (!workspacePath) {
       return { unavailableReason: text(
         "请为该项目设置工作目录：在切换项目菜单中右键该项目 → 设置工作目录",
         "Set a workspace for this project: right-click it in the project switcher menu → Set workspace",
@@ -1023,20 +1056,17 @@ export function App() {
         "Taskboard has not received the Skill path",
       ) };
     }
-    const codexProject = hostContext?.projects?.find((project) => project.id === codexProjectId);
     return {
       workspacePath,
-      codexProjectId,
-      codexProjectKind: codexProject?.projectKind ?? "local",
-      codexHostId: codexProject?.hostId ?? "local",
+      codexProjectId: workspacePath,
+      codexProjectKind: "local" as const,
+      codexHostId: "local" as const,
       unavailableReason: null,
     };
   }, [
     deviceWorkspacePaths,
-    hostContext,
     localAiChatAvailable,
     manageTaskboardSkillPath,
-    projectCodexIdentities,
     selectedProject,
     text,
   ]);
@@ -1056,27 +1086,10 @@ export function App() {
       codexHostId: automationProjectContext.codexHostId,
       projectName: selectedProject.name,
       workspacePath: automationProjectContext.workspacePath,
-      remoteProjects: automationProjectContext.codexProjectKind === "remote"
-        ? (hostContext?.projects ?? [])
-            .filter((project) => (
-              project.projectKind === "remote"
-              && project.hostId === automationProjectContext.codexHostId
-              && typeof project.workspacePath === "string"
-            ))
-            .map((project) => ({
-              codexProjectId: project.id,
-              codexProjectKind: "remote" as const,
-              codexHostId: project.hostId!,
-              workspacePath: project.workspacePath!,
-            }))
-            .sort((left, right) => (
-              left.workspacePath.localeCompare(right.workspacePath)
-              || left.codexProjectId.localeCompare(right.codexProjectId)
-            ))
-        : [],
+      remoteProjects: [],
       skillPath: manageTaskboardSkillPath,
     };
-  }, [automationProjectContext, hostContext, manageTaskboardSkillPath, selectedProject]);
+  }, [automationProjectContext, manageTaskboardSkillPath, selectedProject]);
   const referenceTasks = useMemo(() => [...tasks, ...archivedTasks], [archivedTasks, tasks]);
   const detailTask = detailTaskIdentifier
     ? referenceTasks.find((task) => task.identifier === detailTaskIdentifier) ?? null
@@ -1099,27 +1112,6 @@ export function App() {
     const persistedById = new Map(projects.map((project) => [project.id, project]));
     const seen = new Set<string>();
     const choices: ProjectChoice[] = [];
-    for (const project of hostContext?.projects ?? []) {
-      if (!project.id || !project.name || seen.has(project.id)) continue;
-      seen.add(project.id);
-      choices.push({
-        id: project.id,
-        name: project.id === GLOBAL_PROJECT_ID
-          ? text("临时任务", "Temporary tasks")
-          : persistedById.get(project.id)?.name ?? project.name,
-        issueCount: persistedById.get(project.id)?.issueCount ?? 0,
-        inCodex: true,
-        persisted: persistedById.has(project.id),
-        codexIdentity: project.workspacePath && project.projectKind && project.hostId
-          ? {
-              codexProjectId: project.id,
-              codexProjectKind: project.projectKind,
-              codexHostId: project.hostId,
-              workspacePath: project.workspacePath,
-            }
-          : null,
-      });
-    }
     for (const project of projects) {
       if (seen.has(project.id)) continue;
       choices.push({
@@ -1142,7 +1134,7 @@ export function App() {
       ...sortedChoices.filter((project) => project.issueCount > 0),
       ...sortedChoices.filter((project) => project.issueCount === 0),
     ];
-  }, [hostContext?.projects, projectCodexIdentities, projects, recentProjectIds, text]);
+  }, [projectCodexIdentities, projects, recentProjectIds, text]);
   const projectMenuCandidates = projectChoices.filter(
     (project) => project.id !== GLOBAL_PROJECT_ID || project.issueCount > 0,
   );
@@ -1167,7 +1159,6 @@ export function App() {
   function openTaskContextMenu(task: Task, position: { x: number; y: number }) {
     if (
       isAllProjects
-      && (!embedded || window.parent === window)
       && task.developmentContext?.type === "worktree"
     ) {
       setDevelopmentScanLoading(true);
@@ -1582,18 +1573,16 @@ export function App() {
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-    document.documentElement.dataset.embedded = String(embedded);
     document.documentElement.style.colorScheme = theme;
-  }, [embedded, theme]);
+  }, [theme]);
 
   useEffect(() => {
-    if (embedded && window.parent !== window) return;
     const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
     const syncTheme = () => setTheme(systemTheme.matches ? "dark" : "light");
     syncTheme();
     systemTheme.addEventListener("change", syncTheme);
     return () => systemTheme.removeEventListener("change", syncTheme);
-  }, [embedded]);
+  }, []);
 
   useEffect(() => {
     if (selectedProjectId) {
@@ -1663,92 +1652,44 @@ export function App() {
   }, [selectedProjectId, reconcileProjectAutomation]);
 
   useEffect(() => {
-    if (!embedded || window.parent === window) return;
-    let acknowledgedFrameChallenge = "";
-
-    function receiveHostMessage(event: MessageEvent) {
-      if (event.source !== window.parent || !event.data || typeof event.data !== "object") return;
-      const message = event.data as { type?: string; payload?: unknown; theme?: unknown };
-
-      if (message.type === "taskboard:frame-challenge") {
-        const challenge = typeof message.payload === "object"
-          && message.payload
-          && "challenge" in message.payload
-          && typeof message.payload.challenge === "string"
-          ? message.payload.challenge
-          : "";
-        if (!challenge || challenge === acknowledgedFrameChallenge) return;
-        acknowledgedFrameChallenge = challenge;
-        setEmbeddedFrameChallenge(challenge);
-        setEmbeddedFrameChallengeState(challenge);
-        postEmbeddedHostMessage({ type: "taskboard:ready" });
-        return;
-      }
-
-      if (message.type === "taskboard:theme" && isTheme(message.theme)) {
-        setTheme(message.theme);
-        return;
-      }
-
-      if (message.type === "taskboard:thread-prepared" && message.payload) {
-        setOpeningThreadTaskId(null);
-        return;
-      }
-
-      if (message.type === "taskboard:thread-create-error" && message.payload) {
-        const payload = message.payload as { error?: unknown };
-        setOpeningThreadTaskId(null);
-        setActionError(typeof payload.error === "string"
-          ? payload.error
-          : textRef.current("无法打开新对话。", "Could not open a new conversation."));
-        return;
-      }
-
-      if (message.type === "taskboard:thread-open-error" && message.payload) {
-        const payload = message.payload as { error?: unknown };
-        setActionError(typeof payload.error === "string"
-          ? payload.error
-          : textRef.current("无法打开该会话。", "Could not open the conversation."));
-        return;
-      }
-
-      if (message.type !== "taskboard:host-context" || !message.payload) return;
-      const payload = message.payload as HostContext;
-      setHostContext(payload);
-      setCurrentUserActor(payload.user);
-      if (isTheme(payload.theme)) setTheme(payload.theme);
+    if (!localAiChatAvailable || integrationDialogOpen) return;
+    const controller = new AbortController();
+    void getSetupStatus().then((status) => {
+      setSetupStatus((current) => (
+        current === null || current.skillInstalled !== status.skillInstalled ? status : current
+      ));
+    }, () => {});
+    if (selectedProject && selectedProject.id !== GLOBAL_PROJECT_ID) {
+      void getProjectIntegration(selectedProject.id).then((status) => {
+        setIntegrationStatus((current) => (
+          current === null || current.configured !== status.configured ? status : current
+        ));
+      }, () => setIntegrationStatus(null));
+    } else {
+      setIntegrationStatus(null);
     }
+    return () => controller.abort();
+  }, [integrationDialogOpen, localAiChatAvailable, selectedProject?.id]);
 
-    const removeExternalLinkHandler = installEmbeddedExternalLinkHandler();
-    window.addEventListener("message", receiveHostMessage);
-    postEmbeddedHostMessage({ type: "taskboard:frame-awaiting-challenge" });
+  useEffect(() => {
+    if (!sessionsPanelOpen) return;
+    let disposed = false;
+    const sync = async () => {
+      setSessionsLoading(true);
+      try {
+        const sessions = await listLocalSessions();
+        if (!disposed) setLocalSessions(sessions);
+      } catch {} finally {
+        if (!disposed) setSessionsLoading(false);
+      }
+    };
+    void sync();
+    const timer = window.setInterval(sync, 3_000);
     return () => {
-      window.removeEventListener("message", receiveHostMessage);
-      setEmbeddedFrameChallenge("");
-      removeExternalLinkHandler();
+      disposed = true;
+      window.clearInterval(timer);
     };
-  }, [embedded, host]);
-
-  useLayoutEffect(() => {
-    if (!embedded || window.parent === window || !dragRegionRef.current) return;
-    const region = dragRegionRef.current;
-    const publish = () => {
-      const rect = region.getBoundingClientRect();
-      postEmbeddedHostMessage({
-        type: "taskboard:drag-region",
-        payload: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-      });
-    };
-    const observer = new ResizeObserver(publish);
-    observer.observe(region);
-    window.addEventListener("resize", publish);
-    publish();
-    return () => {
-      observer.disconnect();
-      window.removeEventListener("resize", publish);
-      postEmbeddedHostMessage({ type: "taskboard:drag-region", payload: null });
-    };
-  }, [detailTaskId, embedded, embeddedFrameChallenge, selectedProjectId]);
+  }, [sessionsPanelOpen]);
 
   const loadProjectList = useCallback(async (signal?: AbortSignal) => {
     const requestId = ++projectsRequestRef.current;
@@ -1920,7 +1861,7 @@ export function App() {
   }, [isJiraProject, jiraConnection?.configured, refreshTasks, taskScopeProjectId]);
 
   useEffect(() => {
-    const standalone = !embedded || window.parent === window;
+    const standalone = true;
     const developmentProjectId = isAllProjects
       ? developmentEditorProjectId ?? (standalone ? contextMenuTask?.projectId : null)
       : selectedProjectId;
@@ -1931,10 +1872,9 @@ export function App() {
     }
     const controller = new AbortController();
     const codexProjectId = developmentProjectId === GLOBAL_PROJECT_ID
-      ? hostContext?.projectId
+      ? undefined
       : developmentProjectId;
-    const claudeThreadId = hostContext?.threadId
-      ?? (isAllProjects ? contextMenuTask?.threadId : detailTask?.threadId)
+    const claudeThreadId = (isAllProjects ? contextMenuTask?.threadId : detailTask?.threadId)
       ?? undefined;
     const workspacePath = isAllProjects
       ? developmentEditorProjectId
@@ -1970,9 +1910,6 @@ export function App() {
     detailTask?.threadId,
     deviceWorkspacePaths,
     developmentEditorProjectId,
-    embedded,
-    hostContext?.projectId,
-    hostContext?.threadId,
     isAllProjects,
     rememberDeviceWorkspacePath,
     selectedProjectId,
@@ -2197,24 +2134,18 @@ export function App() {
   const taskPresentations = useMemo(() => Object.fromEntries(tasks.map((task) => {
     const unread = (task.status === "in_review" || task.status === "blocked")
       && readActivityKeys[task.id] !== task.activityKey;
-    const runningNativeThreadId = hostContext?.threadRunning
-      ? hostContext.threadId ?? null
-      : null;
     const taskThreadId = normalizeClaudeThreadId(task.threadId);
     return [task.id, taskCardPresentation(
       task,
       aiThreads,
       unread,
-      runningNativeThreadId,
-      hostContext?.threadTodoProgress ?? null,
+      null,
+      null,
       taskThreadId ? claudeSessionProgress[taskThreadId] ?? null : undefined,
     )];
   })) as Record<string, TaskCardPresentation>, [
     aiThreads,
     claudeSessionProgress,
-    hostContext?.threadId,
-    hostContext?.threadRunning,
-    hostContext?.threadTodoProgress,
     readActivityKeys,
     tasks,
   ]);
@@ -2747,62 +2678,166 @@ export function App() {
     }
   }
 
+  async function refreshIntegrationDialogState() {
+    if (!selectedProject || selectedProject.id === GLOBAL_PROJECT_ID) {
+      setIntegrationStatus(null);
+    } else {
+      try {
+        setIntegrationStatus(await getProjectIntegration(selectedProject.id));
+      } catch {
+        setIntegrationStatus(null);
+      }
+    }
+    try {
+      setSetupStatus(await getSetupStatus());
+    } catch {
+      setSetupStatus(null);
+    }
+  }
+
+  function openIntegrationDialog() {
+    setProjectMenuOpen(false);
+    setProjectContextMenu(null);
+    setIntegrationDialogOpen(true);
+    void refreshIntegrationDialogState();
+  }
+
+  async function configureProjectIntegration() {
+    if (!selectedProject || integrationBusy) return;
+    setIntegrationBusy(true);
+    setActionError(null);
+    try {
+      await setupProjectIntegrationRequest(selectedProject.id);
+      await refreshIntegrationDialogState();
+      setAnnouncement(text("已为该项目配置 Claude Code 集成。", "Claude Code integration configured for this project."));
+    } catch (error) {
+      setActionError(errorMessage(error));
+    } finally {
+      setIntegrationBusy(false);
+    }
+  }
+
+  async function removeProjectIntegrationAction() {
+    if (!selectedProject || integrationBusy) return;
+    setIntegrationBusy(true);
+    setActionError(null);
+    try {
+      await removeProjectIntegrationRequest(selectedProject.id);
+      await refreshIntegrationDialogState();
+      setAnnouncement(text("已移除该项目的 Claude Code 集成。", "Claude Code integration removed for this project."));
+    } catch (error) {
+      setActionError(errorMessage(error));
+    } finally {
+      setIntegrationBusy(false);
+    }
+  }
+
+  async function installSkillAction() {
+    if (integrationBusy) return;
+    setIntegrationBusy(true);
+    setActionError(null);
+    try {
+      await installSkillRequest();
+      await refreshIntegrationDialogState();
+      setAnnouncement(text("manage-taskboard 技能已安装到 ~/.claude/skills。", "The manage-taskboard skill was installed to ~/.claude/skills."));
+    } catch (error) {
+      setActionError(errorMessage(error));
+    } finally {
+      setIntegrationBusy(false);
+    }
+  }
+
+  async function bindSessionToDetailTask(session: LocalSession) {
+    const task = detailTask;
+    if (!task || !session.workspacePath || integrationBusy) return;
+    setIntegrationBusy(true);
+    setActionError(null);
+    try {
+      const binding = {
+        threadId: session.sessionId,
+        codexProjectId: session.workspacePath,
+        codexProjectKind: "local" as const,
+        codexHostId: "local",
+        workspacePath: session.workspacePath,
+      };
+      await moveTaskRequest(task, task.status, undefined, binding, session.sessionId);
+      setAnnouncement(text(
+        `已把会话 ${session.sessionId.slice(0, 8)} 绑定到 ${task.identifier}。`,
+        `Bound session ${session.sessionId.slice(0, 8)} to ${task.identifier}.`,
+      ));
+      setSessionsPanelOpen(false);
+    } catch (error) {
+      setActionError(errorMessage(error));
+    } finally {
+      setIntegrationBusy(false);
+    }
+  }
+
+  // Interactive takeover: open a real terminal running `claude` (resuming the
+  // given session when known) in the project workspace. Falls back to a
+  // copyable command when no terminal could be spawned.
+  async function continueInTerminal(options: {
+    sessionId?: string | null;
+    prompt?: string | null;
+    projectId?: string | null;
+  } = {}) {
+    if (!localAiChatAvailable) {
+      setActionError(text(
+        "终端会话仅在本机可用。请在运行看板服务的机器上用 http://127.0.0.1:47823 打开后操作。",
+        "Terminal sessions are only available locally. Open http://127.0.0.1:47823 on the machine running the board service.",
+      ));
+      return;
+    }
+    const project = options.projectId
+      ? projects.find((candidate) => candidate.id === options.projectId)
+      : selectedProject;
+    const workspacePath = project
+      ? deviceWorkspacePaths[project.id] ?? project.workspacePath
+      : null;
+    if (!workspacePath) {
+      setActionError(text(
+        "请先为该项目设置工作目录：在切换项目菜单中右键该项目 → 设置工作目录",
+        "Set a workspace for this project first: right-click it in the project switcher menu → Set workspace",
+      ));
+      return;
+    }
+    try {
+      const result = await launchTerminalSessionRequest({
+        workspacePath,
+        ...(options.sessionId ? { sessionId: options.sessionId } : {}),
+        ...(options.prompt ? { prompt: options.prompt } : {}),
+      });
+      if (result.launched) {
+        setAnnouncement(text("已在终端打开 Claude Code 会话。", "Opened a Claude Code session in the terminal."));
+        return;
+      }
+      await copyText(
+        result.command,
+        text(
+          "无法拉起终端窗口，已复制启动命令，请粘贴到终端中运行。",
+          "Could not open a terminal window; the launch command was copied — paste it into a terminal.",
+        ),
+      );
+    } catch (error) {
+      setActionError(errorMessage(error));
+    }
+  }
+
   function codexProjectContextForTaskProject(taskboardProjectId: string) {
     if (taskboardProjectId === GLOBAL_PROJECT_ID) return null;
     const taskboardProject = projects.find((project) => project.id === taskboardProjectId);
-    const savedIdentity = projectCodexIdentities[taskboardProjectId];
-    if (savedIdentity?.codexProjectKind === "remote") {
-      const liveProject = hostContext?.projects?.find(
-        (project) => project.id === savedIdentity.codexProjectId,
-      );
-      return liveProject?.projectKind === "remote"
-        && liveProject.hostId === savedIdentity.codexHostId
-        && liveProject.workspacePath === savedIdentity.workspacePath
-        ? savedIdentity
-        : null;
-    }
-    const directCodexProject = hostContext?.projects?.find(
-      (project) => project.id === taskboardProjectId,
-    );
-    const mappedWorkspacePath = deviceWorkspacePaths[taskboardProjectId]
-      ?? taskboardProject?.workspacePath
-      ?? directCodexProject?.workspacePath;
-    const codexProject = directCodexProject ?? hostContext?.projects?.find(
-      (project) => project.workspacePath === mappedWorkspacePath,
-    );
-    if (!codexProject) return null;
+    const workspacePath = deviceWorkspacePaths[taskboardProjectId]
+      ?? taskboardProject?.workspacePath;
+    if (!workspacePath) return null;
     return {
-      codexProjectId: codexProject.id,
-      codexProjectKind: codexProject.projectKind ?? "local" as const,
-      codexHostId: codexProject.hostId ?? "local",
-      workspacePath: mappedWorkspacePath ?? codexProject.workspacePath,
+      codexProjectId: workspacePath,
+      codexProjectKind: "local" as const,
+      codexHostId: "local",
+      workspacePath,
     };
   }
 
   function openThread(binding: CodexThreadBinding) {
-    const remoteProject = binding.codexProjectKind === "remote"
-      ? hostContext?.projects?.find((project) => (
-          project.id === binding.codexProjectId
-          && project.projectKind === "remote"
-          && project.hostId === binding.codexHostId
-          && project.workspacePath === binding.workspacePath
-        ))
-      : null;
-    if (binding.codexProjectKind === "remote" && !remoteProject) {
-      setActionError(text(
-        "该对话绑定的 SSH 远程项目或主机当前不可用。",
-        "The SSH remote project or host bound to this conversation is not available.",
-      ));
-      return;
-    }
-    if (embedded && window.parent !== window) {
-      postEmbeddedHostMessage({
-        type: "taskboard:open-thread",
-        payload: binding,
-      });
-      return;
-    }
-
     if (binding.codexProjectKind === "remote") {
       setActionError(text(
         "该 SSH 远程对话需要在其原始环境中打开。",
@@ -2810,24 +2845,18 @@ export function App() {
       ));
       return;
     }
-    void copyText(
-      `claude --resume ${binding.threadId.trim()}`,
-      text("Claude Code 恢复命令已复制，请在终端中运行。", "Claude Code resume command copied. Run it in a terminal."),
-    );
+    void continueInTerminal({
+      sessionId: binding.threadId.trim(),
+      projectId: binding.workspacePath
+        ? projects.find((candidate) => (
+          (deviceWorkspacePaths[candidate.id] ?? candidate.workspacePath) === binding.workspacePath
+        ))?.id ?? null
+        : null,
+    });
   }
 
   function openLegacyLocalThread(threadId: string) {
-    if (embedded && window.parent !== window) {
-      postEmbeddedHostMessage({
-        type: "taskboard:open-thread",
-        payload: { threadId, legacyLocal: true },
-      });
-      return;
-    }
-    void copyText(
-      `claude --resume ${threadId.trim()}`,
-      text("Claude Code 恢复命令已复制，请在终端中运行。", "Claude Code resume command copied. Run it in a terminal."),
-    );
+    void continueInTerminal({ sessionId: threadId.trim() });
   }
 
   function openTaskConversation(conversation: TaskConversationItem) {
@@ -2843,39 +2872,6 @@ export function App() {
     } else if (conversation.legacyLocalThreadId) {
       openLegacyLocalThread(conversation.legacyLocalThreadId);
     }
-  }
-
-  function expandCodexSidebar() {
-    if (!embedded || window.parent === window) return;
-    postEmbeddedHostMessage({ type: "taskboard:expand-sidebar" });
-  }
-
-  function remoteIdentityForTask(
-    task: Task,
-    baseIdentity: CodexProjectIdentity,
-  ): CodexProjectIdentity | null {
-    if (task.developmentContext?.type === "worktree") {
-      const worktreePath = task.developmentContext.path;
-      const matches = (hostContext?.projects ?? []).filter((project) => (
-        project.projectKind === "remote"
-        && project.hostId === baseIdentity.codexHostId
-        && project.workspacePath === worktreePath
-      ));
-      if (matches.length !== 1) return null;
-      return {
-        codexProjectId: matches[0].id,
-        codexProjectKind: "remote",
-        codexHostId: matches[0].hostId!,
-        workspacePath: matches[0].workspacePath!,
-      };
-    }
-    const liveProject = hostContext?.projects?.find((project) => (
-      project.id === baseIdentity.codexProjectId
-      && project.projectKind === "remote"
-      && project.hostId === baseIdentity.codexHostId
-      && project.workspacePath === baseIdentity.workspacePath
-    ));
-    return liveProject ? baseIdentity : null;
   }
 
   async function openTaskInThread(task: Task) {
@@ -3260,13 +3256,11 @@ export function App() {
     : selectedProject?.id === GLOBAL_PROJECT_ID
       ? text("临时任务", "Temporary tasks")
       : selectedProject?.name ?? text("任务面板", "Taskboard");
-  const appShellStyle = embedded
-    ? { "--codex-titlebar-left-inset": `${hostContext?.titlebarLeftInset ?? 0}px` } as CSSProperties
-    : undefined;
+  const appShellStyle: CSSProperties = {};
 
   return (
     <TaskboardLanguageProvider language={language}>
-      <div className={`app-shell${embedded ? " embedded" : ""}`} style={appShellStyle}>
+      <div className="app-shell" style={appShellStyle}>
       {taskboardMetadata && taskboardMetadata.mode !== "cloud" && (
         <LocalRealtimeSync
           selectedProjectId={taskScopeProjectId}
@@ -3292,17 +3286,6 @@ export function App() {
                   onClick={closeTaskDetail}
                 >
                   <LinearIcon name="chevronLeft" />
-                </button>
-              )}
-              {embedded && hostContext?.sidebarCollapsed && (
-                <button
-                  className="detail-back-button codex-sidebar-expand-button"
-                  type="button"
-                  aria-label={text("展开侧边栏", "Expand sidebar")}
-                  title={text("展开侧边栏", "Expand sidebar")}
-                  onClick={expandCodexSidebar}
-                >
-                  <LinearIcon name="codexSidebarExpand" />
                 </button>
               )}
               <div className="header-project-switcher" data-project-switcher>
@@ -3378,7 +3361,7 @@ export function App() {
                             role="menuitemradio"
                             aria-checked={project.id === selectedProjectId}
                             disabled={openingProjectId !== null}
-                            onContextMenu={project.id.startsWith("temp-") ? (event) => {
+                            onContextMenu={project.id !== GLOBAL_PROJECT_ID ? (event) => {
                               event.preventDefault();
                               setProjectContextMenu({
                                 project,
@@ -3432,7 +3415,6 @@ export function App() {
             </div>
           </div>
 
-          <div ref={dragRegionRef} className="workspace-drag-region" aria-hidden="true" />
 
           <div className="header-actions">
             {selectedProject && (
@@ -3584,6 +3566,20 @@ export function App() {
                 onReset={resetProjectBoardDisplaySettings}
               />
             )}
+            {localAiChatAvailable && (
+              <button
+                className={`other-tasks-trigger${sessionsPanelOpen ? " is-open" : ""}`}
+                type="button"
+                aria-expanded={sessionsPanelOpen}
+                aria-label={sessionsPanelOpen
+                  ? text("关闭本机会话", "Close local sessions")
+                  : text("打开本机会话", "Open local sessions")}
+                title={text("本机 Claude Code 会话", "Local Claude Code sessions")}
+                onClick={() => setSessionsPanelOpen((current) => !current)}
+              >
+                <TaskboardIcon name="panel" />
+              </button>
+            )}
             {boardView === "issues" && otherTasksAvailable && (
               <button
                 className={`other-tasks-trigger${otherTasksOpen ? " is-open" : ""}`}
@@ -3646,6 +3642,10 @@ export function App() {
             )}
             onOpenThread={openThread}
             onOpenLegacyLocalThread={openLegacyLocalThread}
+            onOpenInTerminal={(threadId) => void continueInTerminal({
+              sessionId: threadId,
+              projectId: detailTask?.projectId ?? null,
+            })}
             onOpenInThread={openTaskInThread}
             onCopy={(text, message) => void copyText(text, message)}
             openingThread={openingThreadTaskId === detailTask.id}
@@ -3883,7 +3883,168 @@ export function App() {
             <span className="context-menu-icon" aria-hidden="true"><DeleteIcon color="currentColor" /></span>
             <span className="context-menu-label">{text("删除项目", "Delete project")}</span>
           </button>
+          <button
+            className="context-menu-item"
+            type="button"
+            role="menuitem"
+            onClick={openIntegrationDialog}
+          >
+            <span className="context-menu-icon" aria-hidden="true"><LinearIcon name="terminal" /></span>
+            <span className="context-menu-label">{text("Claude 集成…", "Claude integration…")}</span>
+          </button>
         </div>
+      )}
+
+      {localAiChatAvailable && !setupBannerDismissed
+        && (setupStatus === null || !setupStatus.skillInstalled
+          || (integrationStatus !== null && !integrationStatus.configured)) && (
+        <div className="setup-banner" role="status">
+          <span>
+            {text(
+              "完成 Claude Code 集成配置（技能 / MCP 工具 / hooks / 斜杠命令），让看板与本机 claude 会话互通。",
+              "Finish the Claude Code integration setup (skill / MCP tools / hooks / slash commands) so the board and local claude sessions interoperate.",
+            )}
+          </span>
+          <button className="button primary" type="button" onClick={openIntegrationDialog}>
+            {text("打开集成设置", "Open integration setup")}
+          </button>
+          <button
+            className="button secondary"
+            type="button"
+            onClick={() => setSetupBannerDismissed(true)}
+          >
+            {text("暂不提示", "Dismiss")}
+          </button>
+        </div>
+      )}
+
+      {integrationDialogOpen && (
+        <div
+          className="delete-backdrop"
+          onPointerDown={(event) => {
+            if (event.target === event.currentTarget && !integrationBusy) setIntegrationDialogOpen(false);
+          }}
+        >
+          <div
+            className="delete-dialog project-create-dialog integration-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="integration-title"
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && !integrationBusy) setIntegrationDialogOpen(false);
+            }}
+          >
+            <h2 id="integration-title">{text("Claude Code 集成", "Claude Code integration")}</h2>
+
+            <section className="integration-section">
+              <strong>{text("全局（本机所有会话）", "Global (all sessions on this machine)")}</strong>
+              <div className="integration-row">
+                <span>{text("manage-taskboard 技能", "manage-taskboard skill")}</span>
+                <span className={setupStatus?.skillInstalled ? "integration-ok" : "integration-missing"}>
+                  {setupStatus?.skillInstalled ? "✓" : "⬜"}
+                </span>
+                {!setupStatus?.skillInstalled && (
+                  <button className="button secondary" type="button" disabled={integrationBusy} onClick={() => void installSkillAction()}>
+                    {text("安装到 ~/.claude/skills", "Install to ~/.claude/skills")}
+                  </button>
+                )}
+              </div>
+              <div className="integration-row">
+                <span>{text("默认工作目录根", "Default workspace root")}</span>
+                <code>{setupStatus?.defaultWorkspaceRoot ?? "…"}</code>
+              </div>
+            </section>
+
+            <section className="integration-section">
+              <strong>{text(
+                selectedProject && selectedProject.id !== GLOBAL_PROJECT_ID
+                  ? `当前项目：${selectedProject.name}`
+                  : "当前项目（全局项目无工作区）",
+                selectedProject && selectedProject.id !== GLOBAL_PROJECT_ID
+                  ? `Current project: ${selectedProject.name}`
+                  : "Current project (the global project has no workspace)",
+              )}</strong>
+              {integrationStatus ? (
+                <>
+                  <div className="integration-row">
+                    <span>{text("MCP 工具（issue_list / issue_move / comment_add…）", "MCP tools (issue_list / issue_move / comment_add…)")}</span>
+                    <span className={integrationStatus.mcp ? "integration-ok" : "integration-missing"}>
+                      {integrationStatus.mcp ? "✓" : "⬜"}
+                    </span>
+                  </div>
+                  <div className="integration-row">
+                    <span>{text("会话 hooks（SessionStart / SessionEnd / Stop）", "Session hooks (SessionStart / SessionEnd / Stop)")}</span>
+                    <span className={integrationStatus.hooks.sessionStart ? "integration-ok" : "integration-missing"}>
+                      {integrationStatus.hooks.sessionStart ? "✓" : "⬜"}
+                    </span>
+                  </div>
+                  <div className="integration-row">
+                    <span>{text("斜杠命令（/e-taskboard、/taskboard-status）", "Slash commands (/e-taskboard, /taskboard-status)")}</span>
+                    <span className={integrationStatus.commands.eTaskboard ? "integration-ok" : "integration-missing"}>
+                      {integrationStatus.commands.eTaskboard ? "✓" : "⬜"}
+                    </span>
+                  </div>
+                  <p className="integration-note">{text(
+                    "配置会在项目工作区写入 .mcp.json、.claude/settings.json（hooks）和 .claude/commands，均先备份、只增删本看板条目；移除时还原。",
+                    "Setup writes .mcp.json, .claude/settings.json (hooks), and .claude/commands into the project workspace — backed up first, only board-owned entries are touched; removal restores them.",
+                  )}</p>
+                  <p className="integration-note">{text(
+                    "首次在新会话中加载 .mcp.json 时 Claude Code 会请求批准；批准后任意 claude 会话即可原生操作看板。",
+                    "Claude Code asks for approval the first time .mcp.json loads in a new session; after approval any claude session can drive the board natively.",
+                  )}</p>
+                </>
+              ) : (
+                <p className="integration-note">{text(
+                  "选择一个具体项目后可配置该项目工作区的集成。",
+                  "Select a concrete project to configure its workspace integration.",
+                )}</p>
+              )}
+              {integrationStatus && (
+                <div className="integration-actions">
+                  <button
+                    className="button primary"
+                    type="button"
+                    disabled={integrationBusy || integrationStatus.configured}
+                    onClick={() => void configureProjectIntegration()}
+                  >
+                    {integrationBusy ? text("处理中…", "Working…") : integrationStatus.configured ? text("已配置", "Configured") : text("配置集成", "Set up integration")}
+                  </button>
+                  <button
+                    className="button secondary"
+                    type="button"
+                    disabled={integrationBusy || !integrationStatus.configured}
+                    onClick={() => void removeProjectIntegrationAction()}
+                  >
+                    {text("移除集成", "Remove integration")}
+                  </button>
+                </div>
+              )}
+            </section>
+
+            {actionErrorText && <p className="project-dialog-error">{actionErrorText}</p>}
+            <div>
+              <button className="button primary" type="button" disabled={integrationBusy} onClick={() => setIntegrationDialogOpen(false)}>
+                {text("关闭", "Close")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {sessionsPanelOpen && (
+        <LocalSessionsPanel
+          sessions={localSessions}
+          loading={sessionsLoading}
+          currentProjectId={taskScopeProjectId}
+          detailTask={detailTask}
+          busy={integrationBusy}
+          onBind={(session) => void bindSessionToDetailTask(session)}
+          onTerminal={(session) => void continueInTerminal({
+            sessionId: session.sessionId,
+            projectId: session.projectId,
+          })}
+          onClose={() => setSessionsPanelOpen(false)}
+        />
       )}
 
       {pendingWorkspaceProject && (

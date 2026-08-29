@@ -152,7 +152,7 @@ test("AI chat API uses the stable local contract and never sends cwd or hidden p
   assert.match(apiSource, /\/turns/);
   assert.match(apiSource, /\/interrupt/);
   assert.match(apiSource, /resolveTaskboardUrl\(`\/api\/local\/ai\/threads\//);
-  assert.doesNotMatch(apiSource, /hiddenPrompt|workspacePath:\s*input|argv|cwd/);
+  assert.doesNotMatch(apiSource, /hiddenPrompt|workspacePath:\s*input|argv|cwd:\s*input/);
 });
 
 test("panel follows the measured Codex-like layout and responsive boundary", () => {
@@ -171,8 +171,12 @@ test("chat renders Markdown, public thinking steps and never renders host-only f
   assert.match(chatSource, /ai-chat-thinking-steps/);
   assert.match(chatSource, /aria-label=\{text\("停止生成", "Stop generating"\)\}/);
   assert.match(chatSource, /aria-label=\{text\("发送消息", "Send message"\)\}/);
-  assert.doesNotMatch(chatSource, /origin\.workspacePath/);
-  assert.doesNotMatch(chatSource, /claudeThreadId/);
+  // Workspace path and session id may only feed the local terminal takeover.
+  const terminalUse = chatSource.indexOf("void launchTerminalSession({");
+  const workspaceUse = chatSource.indexOf("thread.origin.workspacePath", terminalUse);
+  const sessionUse = chatSource.indexOf("thread.claudeThreadId", terminalUse);
+  assert.ok(terminalUse > 0 && workspaceUse > terminalUse);
+  assert.ok(sessionUse > 0);
   assert.doesNotMatch(chatSource, /manageTaskboardSkillPath/);
 });
 

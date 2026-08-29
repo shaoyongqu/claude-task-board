@@ -56,25 +56,34 @@ test("automation requests use the exact local scheduler contract", () => {
   assert.doesNotMatch(appSource, /pendingAutomationRequestsRef/);
 });
 
-test("project mapping is based on exact ids and workspace paths, never project names", () => {
+test("automation context maps projects by workspace path only", () => {
   const automationContextSource = appSource.slice(
     appSource.indexOf("const automationProjectContext"),
     appSource.indexOf("const automationRequestContext"),
   );
-  assert.match(
-    automationContextSource,
-    /const effectiveCodexProjectId = selectedProject\.id === GLOBAL_PROJECT_ID\s*\? hostContext\?\.projectId\s*: selectedProject\.id/,
-  );
-  assert.match(automationContextSource, /project\.id === effectiveCodexProjectId/);
-  assert.match(automationContextSource, /savedIdentity\?\.codexProjectKind === "remote"/);
-  assert.match(automationContextSource, /project\.id === savedIdentity\.codexProjectId/);
-  assert.match(automationContextSource, /liveProject\.hostId !== savedIdentity\.codexHostId/);
-  assert.match(automationContextSource, /liveProject\.workspacePath !== savedIdentity\.workspacePath/);
-  assert.match(appSource, /directCodexProject\?\.workspacePath/);
-  assert.match(appSource, /\(deviceWorkspacePaths\[project\.id\] \?\? project\.workspacePath\) === workspacePath/);
-  assert.match(appSource, /请为该项目设置工作目录：在切换项目菜单中右键该项目/);
-  assert.doesNotMatch(appSource, /project\.name === selectedProject\.name/);
+  assert.match(automationContextSource, /codexProjectId: workspacePath/);
+  assert.match(automationContextSource, /codexProjectKind: "local" as const/);
+  assert.doesNotMatch(appSource, /hostContext/);
 });
+
+test("automation requests use the exact local scheduler contract", () => {
+  assert.match(appSource, /await postAutomationRequest\(\{/);
+  assert.match(appSource, /operation: "ensure-active" \| "pause" \| "list"/);
+  assert.match(appSource, /context: AutomationRequestContext[\s\S]*?taskboardProjectId: context\.taskboardProjectId/);
+  assert.match(appSource, /codexProjectId/);
+  assert.match(appSource, /codexProjectKind/);
+  assert.match(appSource, /codexHostId/);
+  assert.match(appSource, /projectName: context\.projectName/);
+  assert.match(appSource, /workspacePath/);
+  assert.match(appSource, /skillPath: context\.skillPath/);
+  assert.match(appSource, /intervalMinutes: options\.intervalMinutes/);
+  assert.match(appSource, /model: options\.model/);
+  assert.match(appSource, /reasoningEffort: options\.reasoningEffort/);
+  assert.match(appSource, /requestId: randomUUID\(\)/);
+  assert.doesNotMatch(appSource, /taskboard:automation-response/);
+  assert.doesNotMatch(appSource, /pendingAutomationRequestsRef/);
+});
+
 
 test("tasks open a new board AI conversation bound to the issue", () => {
   const openTaskSource = appSource.slice(

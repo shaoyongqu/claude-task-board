@@ -24,6 +24,7 @@ import {
   getAiChatComposerCandidates,
   getAiChatThread,
   interruptAiChatRun,
+  launchTerminalSession,
   compactAiChatThread,
   listAiChatThreads,
   rebindAiChatComposerReferences,
@@ -85,6 +86,7 @@ import {
   RelationIcon,
   SendIcon,
   StatusIcon,
+  TerminalIcon,
   WorkspaceWritePermissionIcon,
 } from "./SemanticIcons";
 import { TaskboardIcon } from "./TaskboardIcon";
@@ -2907,6 +2909,35 @@ export function AiChat({
                 "Select a chat or start one in the current project",
               )}</span>
             </div>
+            <button
+              type="button"
+              aria-label={text("在终端继续", "Continue in terminal")}
+              title={text("在系统终端中续接此 Claude Code 会话", "Resume this Claude Code session in a system terminal")}
+              disabled={!snapshot?.thread.claudeThreadId}
+              onClick={() => {
+                const thread = snapshot?.thread;
+                if (!thread?.claudeThreadId || !thread.origin.workspacePath) return;
+                void launchTerminalSession({
+                  workspacePath: thread.origin.workspacePath,
+                  sessionId: thread.claudeThreadId,
+                }).then(
+                  (result) => {
+                    if (result.launched) return;
+                    void navigator.clipboard.writeText(result.command).then(() => {
+                      setError(text(
+                        "无法拉起终端窗口，已复制启动命令，请粘贴到终端中运行。",
+                        "Could not open a terminal window; the launch command was copied — paste it into a terminal.",
+                      ));
+                    }, () => {
+                      setError(text("无法拉起终端窗口。", "Could not open a terminal window."));
+                    });
+                  },
+                  (launchError) => setError(messageFor(launchError)),
+                );
+              }}
+            >
+              <TerminalIcon />
+            </button>
             <button
               type="button"
               aria-label={text("对话历史", "Chat history")}

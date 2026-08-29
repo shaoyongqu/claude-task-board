@@ -11912,3 +11912,141 @@ kbd {
   font-size: 11px;
   opacity: 0.7;
 }
+
+.issue-conversation-terminal {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.setup-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-raised, var(--surface));
+  font-size: 12px;
+}
+
+.setup-banner > span:first-child {
+  flex: 1;
+}
+
+.integration-dialog {
+  max-width: 520px;
+}
+
+.integration-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 10px 0;
+  text-align: left;
+}
+
+.integration-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.integration-row > span:first-child {
+  flex: 1;
+}
+
+.integration-ok {
+  color: #2e9e5b;
+  font-weight: 600;
+}
+
+.integration-missing {
+  opacity: 0.6;
+}
+
+.integration-note {
+  font-size: 11px;
+  opacity: 0.75;
+  margin: 0;
+}
+
+.integration-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.local-sessions-panel {
+  position: fixed;
+  right: 16px;
+  top: 64px;
+  bottom: 16px;
+  width: 380px;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgb(0 0 0 / 24%);
+  padding: 14px;
+}
+
+.local-sessions-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.local-sessions-hint,
+.local-sessions-status {
+  font-size: 11px;
+  opacity: 0.7;
+  margin: 8px 0;
+}
+
+.local-sessions-panel ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.local-sessions-panel li {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.local-sessions-panel li.is-ended {
+  opacity: 0.55;
+}
+
+.local-session-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.local-session-meta {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.local-session-main code {
+  font-size: 10px;
+  word-break: break-all;
+  opacity: 0.65;
+}
+
+.local-session-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}

@@ -10,3 +10,4 @@ cloud-migration-exports/
 .DS_Store
 /*-proof.png
 /workflow-telemetry.json
+.zcode/

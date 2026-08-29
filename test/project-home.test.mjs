@@ -11,10 +11,9 @@ const labelPickerSource = await readFile(new URL("../web/src/components/LabelPic
 const pendingAttachmentsSource = await readFile(new URL("../web/src/components/PendingAttachments.tsx", import.meta.url), "utf8");
 const labelsSource = await readFile(new URL("../web/src/labels.ts", import.meta.url), "utf8");
 
-test("the project switcher merges live Codex projects with persisted Taskboard projects", () => {
-  assert.match(appSource, /hostContext\?\.projects \?\? \[\]/);
+test("the project switcher lists persisted Taskboard projects", () => {
   assert.match(appSource, /persistedById/);
-  assert.match(appSource, /name: project\.id === GLOBAL_PROJECT_ID\s*\? text\("临时任务", "Temporary tasks"\)\s*: persistedById\.get\(project\.id\)\?\.name \?\? project\.name/);
+  assert.match(appSource, /name: project\.id === GLOBAL_PROJECT_ID\s*\? text\("临时任务", "Temporary tasks"\)\s*: project\.name/);
   assert.match(appSource, /for \(const project of projects\) \{[\s\S]*?inCodex: false,[\s\S]*?persisted: true/);
   assert.match(appSource, /projectMenuChoices\.map\(\(project\) => \(/);
   assert.match(appSource, /createProjectRequest/);
@@ -33,22 +32,10 @@ test("each device stores an independent workspace path for every project", () =>
   assert.match(apiSource, /\/api\/device-workspaces/);
 });
 
-test("imported Codex projects persist their exact device identity", () => {
-  assert.match(appSource, /const PROJECT_CODEX_IDENTITIES_KEY = "taskboard\.projectCodexIdentities\.v1"/);
-  assert.match(appSource, /codexProjectId: project\.id,[\s\S]*?codexProjectKind: project\.projectKind,[\s\S]*?codexHostId: project\.hostId,[\s\S]*?workspacePath: project\.workspacePath/);
-  assert.match(appSource, /setProjectCodexIdentities[\s\S]*?PROJECT_CODEX_IDENTITIES_KEY/);
+test("persisted projects keep their stored identity fields", () => {
+  assert.match(appSource, /codexIdentity: projectCodexIdentities\[project\.id\] \?\? null/);
 });
 
-test("project selection starts from the route or recent projects and updates the route", () => {
-  assert.match(appSource, /const RECENT_PROJECT_IDS_KEY = "taskboard\.recentProjectIds\.v1"/);
-  assert.match(appSource, /const initialProjectId = query\.get\("project"\) \?\? recentProjectIds\[0\] \?\? ALL_PROJECTS_ID/);
-  assert.match(appSource, /const rememberProjectOpen = useCallback/);
-  assert.match(appSource, /taskboardStorage\.setItem\(RECENT_PROJECT_IDS_KEY, JSON\.stringify\(next\)\)/);
-  assert.match(appSource, /function changeProject\(projectId: string\)/);
-  assert.match(appSource, /setSelectedProjectId\(projectId\)/);
-  assert.match(appSource, /const url = buildIssueUrl\(window\.location\.href, projectId, null\)/);
-  assert.match(appSource, /window\.history\.replaceState\(null, "", url\)/);
-});
 
 test("the selected project exposes the current board surfaces", () => {
   assert.match(appSource, /<header className="workspace-header">/);
@@ -106,20 +93,12 @@ test("the project header keeps detail navigation separate from the project switc
   assert.doesNotMatch(appSource, /detailTask\?\.identifier \?\? "议题"/);
 });
 
-test("the collapsed Codex sidebar can be expanded immediately left of the project switcher", () => {
-  assert.match(
-    appSource,
-    /hostContext\?\.sidebarCollapsed[\s\S]*?className="detail-back-button codex-sidebar-expand-button"[\s\S]*?className="header-project-switcher"/,
-  );
-  assert.match(styles, /\.codex-sidebar-expand-button \{[\s\S]*?width: 28px;[\s\S]*?height: 28px;/);
-});
-
-test("the app omits the old navigation and keeps the embedded draggable header region", () => {
+test("the app keeps the workspace header and drops embedded-host leftovers", () => {
   assert.doesNotMatch(appSource, /<aside className="app-nav"/);
   assert.match(appSource, /<header className="workspace-header">/);
-  assert.match(appSource, /ref=\{dragRegionRef\} className="workspace-drag-region"/);
-  assert.match(styles, /\.workspace-drag-region \{[\s\S]*?flex: 1;[\s\S]*?align-self: stretch/);
-  assert.match(styles, /\.app-shell\.embedded \.workspace-drag-region \{[\s\S]*?-webkit-app-region: drag/);
+  assert.doesNotMatch(appSource, /workspace-drag-region/);
+  assert.doesNotMatch(appSource, /codex-sidebar-expand-button/);
+  assert.doesNotMatch(appSource, /app-shell.embedded/);
 });
 
 test("realtime updates remain active on the project home and reconcile after reconnecting", () => {

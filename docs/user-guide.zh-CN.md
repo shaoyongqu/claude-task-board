@@ -20,6 +20,8 @@ npm start               # 启动看板服务
 
 > 注意：需要驱动本机 Claude Code 的功能（AI 对话、自动化、Jira 连接）请在运行服务的机器上用 `127.0.0.1` 访问。
 
+**首次运行**：本机打开看板时，顶部会出现「完成 Claude Code 集成配置」横幅（技能未装或当前项目未配集成时）。点击进入集成设置：一键安装技能、查看默认工作目录根、为当前项目配置/移除 MCP+hooks+斜杠命令三件套。可随时从项目右键菜单 →「Claude 集成…」再次打开。
+
 ---
 
 ## 2. 界面总览
@@ -131,6 +133,27 @@ npm start               # 启动看板服务
 ### 会话归属机制
 
 看板派生的会话被注入 `CLAUDE_THREAD_ID`（其会话 ID）与 `CLAUDE_TASKBOARD_URL`，会话内 `taskctl` 写入自动归属到该会话，并写入五字段完整绑定（会话 ID、项目、类型、主机、工作目录）。
+
+### 在终端继续（交互式接管）
+
+- 议题详情会话区 / AI 对话面板头部 / 会话卡片的「在终端继续」会在**系统终端**打开交互式 `claude` 并自动 `--resume` 对应会话（Windows Terminal 优先，cmd 兜底；都失败时复制启动命令）。
+- 「在新对话打开」走看板内无头对话；两者互补。
+
+---
+
+## 7.5 Claude Code 深度集成（MCP / hooks / 斜杠命令）
+
+配置了集成的项目工作区里，**你自己开的任何 claude 会话**都能原生操作看板：
+
+| 能力 | 说明 |
+| --- | --- |
+| **MCP 工具** | 会话内自动可用 `issue_list / issue_get / issue_create / issue_move / comment_add / project_list / context_current / project_readme_get`，直接说"把 ABC-1 移到处理中"即可 |
+| **会话上报** | SessionStart/End/Stop hooks 自动把会话报给看板；顶栏「本机会话」面板实时列出，可**绑定到当前打开的议题**或终端打开 |
+| **斜杠命令** | `/e-taskboard ABC-1` 完整处理一个议题；`/taskboard-status` 汇报项目状态 |
+
+**部署**：默认根目录下的工作区创建时自动配置；外部仓库在项目右键菜单 →「Claude 集成…」（或首次运行横幅）一键配置/移除。写入 `.mcp.json`、`.claude/settings.json`、`.claude/commands/`，均先备份、只增删看板自有条目。
+
+**注意**：首次在配置了 `.mcp.json` 的工作区启动 claude 会请求批准该 MCP 服务器；`claude mcp reset-project-choices` 可重置。局域网地址下集成配置入口不可用（本机能力）。
 
 ---
 

@@ -1714,3 +1714,113 @@ test("task changes from one LAN client are broadcast to another client", async (
   assert.equal(listResult.body.tasks.some((task) => task.id === createResult.body.task.id), true);
   await reader.cancel();
 });
+
+test("hooks events register sessions that project filters can query", async () => {
+  const baseUrl = await startServer();
+  try {
+    const started = await request(baseUrl, "/api/local/hooks/event", {
+      method: "POST",
+      body: {
+        hook_event_name: "SessionStart",
+        session_id: "77777777-7777-4777-8777-777777777777",
+        cwd: path.join(os.homedir(), "Claude Task Board", "workspaces", "temp-tasks"),
+      },
+    });
+    assert.equal(started.response.status, 200);
+    assert.equal(started.body.session.projectId, "local");
+
+    const all = await request(baseUrl, "/api/local/sessions");
+    assert.equal(all.response.status, 200);
+    assert.equal(all.body.sessions.length, 1);
+
+    const filtered = await request(baseUrl, "/api/local/sessions?projectId=other");
+    assert.equal(filtered.body.sessions.length, 0);
+
+    const ended = await request(baseUrl, "/api/local/hooks/event", {
+      method: "POST",
+      body: { hook_event_name: "SessionEnd", session_id: "77777777-7777-4777-8777-777777777777" },
+    });
+    assert.notEqual(ended.body.session.endedAt, null);
+  } finally {
+    await Promise.resolve();
+  }
+});
+
+test("terminal-session validates its inputs", async () => {
+  const baseUrl = await startServer();
+  try {
+    const relative = await request(baseUrl, "/api/local/terminal-session", {
+      method: "POST",
+      body: { workspacePath: "relative/path" },
+    });
+    assert.equal(relative.response.status, 400);
+    assert.equal(relative.body.error.code, "INVALID_FIELD");
+
+    const missing = await request(baseUrl, "/api/local/terminal-session", {
+      method: "POST",
+      body: { workspacePath: path.join(os.tmpdir(), "definitely-not-here-12345") },
+    });
+    assert.equal(missing.response.status, 409);
+    assert.equal(missing.body.error.code, "WORKSPACE_NOT_FOUND");
+
+    const unknownField = await request(baseUrl, "/api/local/terminal-session", {
+      method: "POST",
+      body: { workspacePath: os.tmpdir(), extra: true },
+    });
+    assert.equal(unknownField.response.status, 400);
+    assert.equal(unknownField.body.error.code, "UNKNOWN_FIELD");
+  } finally {
+    await Promise.resolve();
+  }
+});
+
+test("project claude-integration routes configure, report, and remove", async () => {
+  const workspace = await mkdtemp(path.join(os.tmpdir(), "integration-route-"));
+  const baseUrl = await startServer();
+  try {
+    const created = await request(baseUrl, "/api/projects", {
+      method: "POST",
+      body: { id: "integration-demo", name: "Integration demo", workspacePath: workspace },
+    });
+    assert.equal(created.response.status, 201);
+
+    const before = await request(baseUrl, "/api/local/projects/integration-demo/claude-integration");
+    assert.equal(before.response.status, 200);
+    assert.equal(before.body.configured, false);
+
+    const configured = await request(baseUrl, "/api/local/projects/integration-demo/claude-integration", {
+      method: "POST",
+    });
+    assert.equal(configured.response.status, 200);
+    assert.equal(configured.body.status.configured, true);
+    assert.equal(configured.body.wrote.length > 0, true);
+
+    const idempotent = await request(baseUrl, "/api/local/projects/integration-demo/claude-integration", {
+      method: "POST",
+    });
+    assert.equal(idempotent.body.wrote.length, 0);
+
+    const removed = await request(baseUrl, "/api/local/projects/integration-demo/claude-integration", {
+      method: "DELETE",
+    });
+    assert.equal(removed.response.status, 200);
+    assert.equal(removed.body.status.configured, false);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("setup-status reports the skill and workspace root", async () => {
+  const baseUrl = await startServer();
+  try {
+    const status = await request(baseUrl, "/api/local/setup-status");
+    assert.equal(status.response.status, 200);
+    assert.equal(typeof status.body.skillInstalled, "boolean");
+    assert.equal(
+      status.body.defaultWorkspaceRoot,
+      path.join(os.homedir(), "Claude Task Board", "workspaces"),
+    );
+  } finally {
+    await Promise.resolve();
+  }
+});

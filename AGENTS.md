@@ -10,13 +10,17 @@ For feature work in this repository, use this order:
 
 # Architecture orientation
 
-- `server/` — local HTTP service: `app.mjs` (API routes), `database.mjs` (SQLite), `ai-chat.mjs` + `ai-chat-process.mjs` (Claude Code session execution over `claude -p --output-format stream-json`), `ai-chat-catalog.mjs` (models/skills/agents discovery from `~/.claude`), `automation-scheduler.mjs` (local auto-claim scheduler).
+- `server/` — local HTTP service: `app.mjs` (API routes), `database.mjs` (SQLite), `ai-chat.mjs` + `ai-chat-process.mjs` (Claude Code session execution over `claude -p --output-format stream-json`), `ai-chat-catalog.mjs` (models/skills/agents discovery from `~/.claude` + default workspace root), `automation-scheduler.mjs` (local auto-claim scheduler).
+- `server/mcp.mjs` — MCP server (stdio JSON-RPC) exposing board tools to any claude session in a configured workspace.
+- `server/hooks-bridge.mjs` — forwards Claude Code hook events to `/api/local/hooks/event`; `session-registry.mjs` maps sessions to projects (powers the local sessions panel and MCP write attribution).
+- `server/claude-integration.mjs` — idempotent installer/remover for the per-workspace trio (`.mcp.json`, hooks in `.claude/settings.json`, `.claude/commands/*.md`); board-managed workspaces under the default root are auto-configured.
+- `server/terminal-launcher.mjs` — opens an interactive `claude` in a real terminal (wt → cmd fallback, copy-command last resort).
 - `cli/taskctl.mjs` — board CLI used by agents; conversation attribution comes from `CLAUDE_THREAD_ID`.
 - `skills/manage-taskboard/` — the Claude Code skill installed to `~/.claude/skills` via `npm run install:skill`.
-- `web/` — React board UI (Vite); `cloud/` — optional Cloudflare Worker/D1/R2 deployment.
+- `web/` — React board UI (Vite); `cloud/` — optional Cloudflare Worker/D1/R2 deployment. The old embedded-host bridge (postMessage/challenge/drag-region) has been fully removed — the UI is browser-only.
 - Environment variables use the `CLAUDE_TASKBOARD_` prefix (see README).
 
-Claude sessions spawned by the board receive `CLAUDE_THREAD_ID` (their session id) and `CLAUDE_TASKBOARD_URL` (the board API) in their environment, so `taskctl` self-attributes inside those sessions.
+Claude sessions spawned by the board receive `CLAUDE_THREAD_ID` (their session id) and `CLAUDE_TASKBOARD_URL` (the board API) in their environment, so `taskctl` self-attributes inside those sessions. User-launched sessions in integrated workspaces attribute via the hooks registry instead.
 
 # Taskboard Delivery Workflow
 

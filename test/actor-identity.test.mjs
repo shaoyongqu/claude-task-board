@@ -69,11 +69,9 @@ test("comment metadata separators never become avatar content", () => {
   );
 });
 
-test("host identity is forwarded to user-authored taskboard mutations", () => {
-  assert.match(typesSource, /user\?: ActorIdentity/);
+test("local user identity headers stay available for explicit actors", () => {
   assert.match(apiSource, /export function setCurrentUserActor/);
   assert.match(apiSource, /X-Taskboard-User-Id/);
   assert.match(apiSource, /X-Taskboard-User-Name/);
   assert.match(apiSource, /X-Taskboard-User-Avatar/);
-  assert.match(appSource, /setCurrentUserActor\(payload\.user\)/);
 });

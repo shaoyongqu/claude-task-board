@@ -21,6 +21,16 @@ import { resolveClaudeExecutable } from "../shared/claude-executable.mjs";
 import { withoutTaskboardLauncherEnvironment } from "../shared/taskboard-environment.mjs";
 import { parseTaskboardAutomationHostRequest } from "../shared/taskboard-automation.mjs";
 import { LocalAutomationScheduler } from "./automation-scheduler.mjs";
+import { SessionRegistry } from "./session-registry.mjs";
+import { launchTerminalSession } from "./terminal-launcher.mjs";
+import {
+  installManageTaskboardSkill,
+  isBoardManagedWorkspace,
+  manageTaskboardSkillInstalled,
+  projectIntegrationStatus,
+  removeProjectIntegration,
+  setupProjectIntegration,
+} from "./claude-integration.mjs";
 import { AiChatService } from "./ai-chat.mjs";
 import {
   configuredModels,
@@ -1871,6 +1881,8 @@ export function createTaskboardServer(options = {}) {
     processEnv: codexProcessEnvironment,
     killGraceMs: 1_000,
   });
+  const sessionRegistry = new SessionRegistry();
+  let boardBaseUrl = null;
   const aiEventResponses = new Set();
   const claudeSessionSearches = new Map();
   const claudeSessionStateCache = new Map();
@@ -2128,6 +2140,104 @@ export function createTaskboardServer(options = {}) {
           ...(drives.length > 0 ? { drives } : {}),
           directories: entries,
         });
+      }
+
+      if (pathname === "/api/local/terminal-session") {
+        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
+        const body = await readJson(request);
+        assertPlainObject(body);
+        assertAllowedKeys(body, new Set(["workspacePath", "sessionId", "prompt"]));
+        const workspacePath = stringField(body.workspacePath, "workspacePath", {
+          required: true,
+          maxLength: 4096,
+        });
+        if (!path.isAbsolute(workspacePath) || workspacePath.includes("\0")) {
+          throw new ApiError(400, "INVALID_FIELD", "'workspacePath' must be an absolute directory path");
+        }
+        const workspaceStat = await stat(workspacePath).catch(() => null);
+        if (!workspaceStat?.isDirectory()) {
+          throw new ApiError(409, "WORKSPACE_NOT_FOUND", `Workspace '${workspacePath}' is not available`);
+        }
+        const sessionId = stringField(body.sessionId ?? null, "sessionId", { nullable: true, maxLength: 256 });
+        const prompt = stringField(body.prompt ?? null, "prompt", { nullable: true, maxLength: 8_000 });
+        const result = await launchTerminalSession({ workspacePath, sessionId, prompt });
+        return sendJson(response, 200, result);
+      }
+
+      if (pathname === "/api/local/hooks/event") {
+        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
+        const body = await readJson(request);
+        if (!body || typeof body !== "object" || Array.isArray(body)) {
+          throw new ApiError(400, "INVALID_BODY", "Hook event body must be a JSON object");
+        }
+        const session = sessionRegistry.record(body, database.listProjects());
+        return sendJson(response, 200, { session });
+      }
+
+      if (pathname === "/api/local/sessions") {
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        if ([...url.searchParams.keys()].some((key) => key !== "projectId")) {
+          throw new ApiError(400, "UNKNOWN_QUERY_PARAMETER", "Only 'projectId' is supported");
+        }
+        const projectId = url.searchParams.get("projectId");
+        const sessions = sessionRegistry.list()
+          .filter((session) => !projectId || session.projectId === projectId);
+        return sendJson(response, 200, { sessions });
+      }
+
+      if (pathname === "/api/local/setup-status") {
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        if ([...url.searchParams.keys()].length > 0) {
+          throw new ApiError(400, "UNKNOWN_QUERY_PARAMETER", "GET /api/local/setup-status does not accept query parameters");
+        }
+        return sendJson(response, 200, {
+          skillInstalled: await manageTaskboardSkillInstalled(codexProcessEnvironment),
+          defaultWorkspaceRoot: defaultWorkspaceRoot(codexProcessEnvironment),
+          boardBaseUrl,
+        });
+      }
+
+      if (pathname === "/api/local/integration/skill") {
+        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
+        await assertEmptyRequestBody(request, "POST /api/local/integration/skill");
+        const result = await installManageTaskboardSkill(codexProcessEnvironment);
+        return sendJson(response, 200, result);
+      }
+
+      const projectIntegrationRoute = pathname.match(/^\/api\/local\/projects\/([^/]+)\/claude-integration$/);
+      if (projectIntegrationRoute) {
+        let projectId;
+        try {
+          projectId = decodeURIComponent(projectIntegrationRoute[1]);
+        } catch {
+          throw new ApiError(400, "INVALID_PATH", "Project id contains invalid encoding");
+        }
+        validateProjectId(projectId);
+        const project = database.getProject(projectId);
+        if (!project) throw new ApiError(404, "PROJECT_NOT_FOUND", `Project '${projectId}' does not exist`);
+        if (!project.workspacePath) {
+          throw new ApiError(409, "PROJECT_WORKSPACE_UNAVAILABLE", `Project '${projectId}' has no workspace`);
+        }
+        if (request.method === "GET") {
+          return sendJson(response, 200, await projectIntegrationStatus(project.workspacePath));
+        }
+        if (request.method === "POST") {
+          await assertEmptyRequestBody(request, "POST /api/local/projects/:id/claude-integration");
+          if (!boardBaseUrl) {
+            throw new ApiError(409, "BOARD_URL_UNAVAILABLE", "The board URL is not known yet");
+          }
+          const result = await setupProjectIntegration({
+            workspacePath: project.workspacePath,
+            boardUrl: boardBaseUrl,
+          });
+          return sendJson(response, 200, result);
+        }
+        if (request.method === "DELETE") {
+          await assertEmptyRequestBody(request, "DELETE /api/local/projects/:id/claude-integration");
+          const result = await removeProjectIntegration({ workspacePath: project.workspacePath });
+          return sendJson(response, 200, result);
+        }
+        return methodNotAllowed(response, ["GET", "POST", "DELETE"]);
       }
 
       if (pathname === "/api/local/automation") {
@@ -2508,6 +2618,11 @@ export function createTaskboardServer(options = {}) {
           }
           await ensureWorkspaceDirectory(workspacePath);
           const project = database.createProject({ ...input, workspacePath });
+          if (boardBaseUrl && isBoardManagedWorkspace(workspacePath)) {
+            try {
+              await setupProjectIntegration({ workspacePath, boardUrl: boardBaseUrl });
+            } catch {}
+          }
           events.emit("project.created", { project });
           return sendJson(response, 201, { project });
         }
@@ -3430,9 +3545,27 @@ export function createTaskboardServer(options = {}) {
       listening = true;
       const address = server.address();
       if (typeof address?.port === "number") {
-        const boardBaseUrl = `http://127.0.0.1:${address.port}`;
-        aiChat.setBoardBaseUrl(boardBaseUrl);
-        automationScheduler.setBoardBaseUrl(boardBaseUrl);
+        const listenUrl = `http://127.0.0.1:${address.port}`;
+        boardBaseUrl = listenUrl;
+        aiChat.setBoardBaseUrl(listenUrl);
+        automationScheduler.setBoardBaseUrl(listenUrl);
+        // Provision the Claude Code integration files for board-managed
+        // workspaces that do not have them yet.
+        void (async () => {
+          for (const project of database.listProjects()) {
+            if (!project.workspacePath) continue;
+            if (!isBoardManagedWorkspace(project.workspacePath)) continue;
+            try {
+              const status = await projectIntegrationStatus(project.workspacePath);
+              if (!status.configured) {
+                await setupProjectIntegration({
+                  workspacePath: project.workspacePath,
+                  boardUrl: listenUrl,
+                });
+              }
+            } catch {}
+          }
+        })();
       }
       return address;
     },
