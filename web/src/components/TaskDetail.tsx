@@ -1514,19 +1514,21 @@ export function TaskDetail({
                     />
                   </div>
                   <div>
-                    <div className="comment-status-action">
-                      <span>{text("改变状态为-等待认领", "Change status to Todo")}</span>
-                      <button
-                        type="button"
-                        className={`board-setting-switch${changeStatusToTodo ? " is-on" : ""}`}
-                        role="switch"
-                        aria-checked={changeStatusToTodo}
-                        disabled={submitting}
-                        onClick={() => setChangeStatusToTodo((current) => !current)}
-                      >
-                        <span aria-hidden="true" />
-                      </button>
-                    </div>
+                    {currentTask.status !== "todo" && (
+                      <div className="comment-status-action">
+                        <span>{text("改变状态为-等待认领", "Change status to Todo")}</span>
+                        <button
+                          type="button"
+                          className={`board-setting-switch${changeStatusToTodo ? " is-on" : ""}`}
+                          role="switch"
+                          aria-checked={changeStatusToTodo}
+                          disabled={submitting}
+                          onClick={() => setChangeStatusToTodo((current) => !current)}
+                        >
+                          <span aria-hidden="true" />
+                        </button>
+                      </div>
+                    )}
                     <button
                       className="button primary"
                       type="submit"
