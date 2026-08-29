@@ -3094,7 +3094,10 @@ export function App() {
   async function createTemporaryProject() {
     if (openingProjectId) return;
     const name = projectName.trim();
-    if (!name) return;
+    if (!name) {
+      setActionError(["请输入项目名称", "Enter a project name"]);
+      return;
+    }
     const projectId = `temp-${window.crypto.randomUUID()}`;
     setOpeningProjectId(projectId);
     setActionError(null);
@@ -3826,7 +3829,6 @@ export function App() {
               <input
                 autoFocus
                 maxLength={120}
-                required
                 value={projectName}
                 onChange={(event) => setProjectName(event.target.value)}
               />
@@ -3844,7 +3846,7 @@ export function App() {
               <button
                 className="button primary"
                 type="submit"
-                disabled={!projectName.trim() || openingProjectId !== null}
+                disabled={openingProjectId !== null}
               >
                 {openingProjectId
                   ? text("创建中…", "Creating…")
