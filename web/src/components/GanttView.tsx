@@ -524,6 +524,15 @@ export function GanttView({ tasks, presentations, hasActiveFilters, zoom, hideCo
               : text("创建议题后，可在这里安排时间线", "Create an issue to schedule it on the timeline")}</span>
           </div>
         )}
+        {visibleTasks.length > 0 && !visibleTasks.some((task) => task.startDate && task.dueDate) && (
+          <div className="gantt-empty-overlay">
+            <DueDateIcon color="currentColor" />
+            <span>{text(
+              "当前议题都没有设置开始/截止日期，所以时间线上没有条目。打开议题，在属性中设置日期即可排期。",
+              "None of the issues have start/due dates set, so the timeline is empty. Open an issue and set dates in its properties to schedule it.",
+            )}</span>
+          </div>
+        )}
       </div>
     </div>
   );
