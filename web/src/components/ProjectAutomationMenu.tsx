@@ -5,7 +5,7 @@ import { ProjectIcon, RecurrenceIcon } from "./SemanticIcons";
 import { TaskPropertyPicker } from "./TaskPropertyPicker";
 import { TaskboardIcon } from "./TaskboardIcon";
 import { useTaskboardI18n } from "../i18n";
-import type { AiChatModel } from "../types";
+import type { AiChatModel, ModelProfile } from "../types";
 
 type AutomationStatus = "ACTIVE" | "PAUSED";
 type AutomationQuotaState = "available" | "blocked" | "unknown" | "unavailable";
@@ -16,6 +16,7 @@ interface AutomationOptions {
   quotaAware: boolean;
   intervalMinutes: IntervalMinutes;
   model: string;
+  modelProfileId: string | null;
   reasoningEffort: string;
 }
 
@@ -32,6 +33,7 @@ interface AutomationState extends AutomationOptions {
 interface ProjectAutomationMenuProps {
   automation?: Partial<AutomationState>;
   models: AiChatModel[];
+  modelProfiles: ModelProfile[];
   pending: boolean;
   error: string | null;
   unavailableReason: string | null;
@@ -61,6 +63,7 @@ function automationOptions(
     quotaAware: automation?.quotaAware ?? false,
     intervalMinutes: automation?.intervalMinutes ?? 5,
     model: model?.slug ?? "",
+    modelProfileId: automation?.modelProfileId ?? null,
     reasoningEffort: reasoningEffort ?? "",
   };
 }
@@ -68,6 +71,7 @@ function automationOptions(
 export function ProjectAutomationMenu({
   automation,
   models,
+  modelProfiles,
   pending,
   error,
   unavailableReason,
@@ -79,7 +83,7 @@ export function ProjectAutomationMenu({
   const menuRef = useRef<HTMLDivElement>(null);
   const wasPendingRef = useRef(pending);
   const [open, setOpen] = useState(false);
-  const [pickerMenu, setPickerMenu] = useState<"interval" | "model" | "reasoning" | null>(null);
+  const [pickerMenu, setPickerMenu] = useState<"interval" | "profile" | "model" | "reasoning" | null>(null);
   const [position, setPosition] = useState({ left: 0, top: 0, ready: false });
   const [draft, setDraft] = useState<AutomationOptions>(() => automationOptions(models, automation));
   const status = automation?.status ?? "PAUSED";
@@ -251,6 +255,38 @@ export function ProjectAutomationMenu({
           })}
         />
       </div>
+      {modelProfiles.length > 0 && (
+        <div className="project-automation-field">
+          <span>{text("模型配置", "Model profile")}</span>
+          <TaskPropertyPicker
+            value={draft.modelProfileId ?? ""}
+            options={[
+              {
+                value: "",
+                label: text("跟随全局默认", "Use global default"),
+                icon: <TaskboardIcon name="projectFolder" />,
+              },
+              ...modelProfiles.map((profile) => ({
+                value: profile.id,
+                label: profile.model
+                  ? `${profile.name} · ${profile.model}`
+                  : profile.name,
+                icon: <ProjectIcon color="currentColor" size={14} />,
+              }))
+            ]}
+            open={pickerMenu === "profile"}
+            disabled={disabled}
+            className="project-automation-picker"
+            triggerClassName="project-automation-picker-trigger"
+            ariaLabel={text("模型配置", "Model profile")}
+            onOpenChange={(open) => setPickerMenu(open ? "profile" : null)}
+            onChange={(value) => submitChange({
+              ...draft,
+              modelProfileId: value || null,
+            })}
+          />
+        </div>
+      )}
       {selectedModel && (
         <>
           <div className="project-automation-field">

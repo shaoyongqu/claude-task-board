@@ -643,7 +643,7 @@ function parseTaskCreate(body) {
   assertPlainObject(body);
   assertAllowedKeys(body, new Set([
     "projectId", "title", "description", "status", "priority", "labels", "sortOrder", "threadId", "threadBinding",
-    "assigneeTarget", "developmentContext", "startDate", "dueDate", "recurrence",
+    "assigneeTarget", "developmentContext", "startDate", "dueDate", "recurrence", "modelProfileId",
   ]));
   const projectId = validateProjectId(body.projectId ?? DEFAULT_PROJECT_ID);
   const task = {
@@ -661,6 +661,7 @@ function parseTaskCreate(body) {
     startDate: parseDueDate(body.startDate ?? null, "startDate"),
     dueDate: parseDueDate(body.dueDate ?? null),
     recurrence: parseRecurrence(body.recurrence ?? null),
+    modelProfileId: parseOptionalModelProfileId(body.modelProfileId) ?? null,
   };
   if (task.recurrence && !task.dueDate) {
     throw new ApiError(400, "INVALID_FIELD", "A recurring issue requires 'dueDate'");
@@ -672,7 +673,7 @@ function parseTaskPatch(body) {
   assertPlainObject(body);
   assertAllowedKeys(body, new Set([
     "version", "projectId", "title", "description", "status", "priority", "labels", "threadId", "threadBinding",
-    "assigneeTarget", "developmentContext", "startDate", "dueDate", "recurrence",
+    "assigneeTarget", "developmentContext", "startDate", "dueDate", "recurrence", "modelProfileId",
   ]));
   const version = parseVersion(body.version);
   const threadId = parseThreadId(body.threadId);
@@ -689,6 +690,9 @@ function parseTaskPatch(body) {
   if (body.startDate !== undefined) changes.startDate = parseDueDate(body.startDate, "startDate");
   if (body.dueDate !== undefined) changes.dueDate = parseDueDate(body.dueDate);
   if (body.recurrence !== undefined) changes.recurrence = parseRecurrence(body.recurrence);
+  if (body.modelProfileId !== undefined) {
+    changes.modelProfileId = parseOptionalModelProfileId(body.modelProfileId) ?? null;
+  }
   if (changes.recurrence && body.dueDate === null) {
     throw new ApiError(400, "INVALID_FIELD", "A recurring issue requires 'dueDate'");
   }
@@ -932,6 +936,7 @@ function parseAiThreadCreate(body) {
     "issueId",
     "title",
     "model",
+    "modelProfileId",
     "reasoningEffort",
     "sandbox",
   ]));
@@ -940,6 +945,7 @@ function parseAiThreadCreate(body) {
     issueId: parseAiSetting(body.issueId, "issueId", 128),
     title: parseAiSetting(body.title, "title", 160),
     model: parseAiSetting(body.model, "model", 128),
+    modelProfileId: parseOptionalModelProfileId(body.modelProfileId),
     reasoningEffort: parseAiSetting(body.reasoningEffort, "reasoningEffort", 64),
     sandbox: parseAiSandbox(body.sandbox),
   };
@@ -957,6 +963,100 @@ function parseAiThreadPatch(body) {
   if (body.sandbox !== undefined) input.sandbox = parseAiSandbox(body.sandbox);
   if (Object.keys(input).length === 0) {
     throw new ApiError(400, "INVALID_BODY", "PATCH requires at least one thread setting");
+  }
+  return input;
+}
+
+function parseOptionalModelProfileId(value) {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value !== "string" || !/^[a-z0-9][a-z0-9._-]{0,127}$/i.test(value)) {
+    throw new ApiError(400, "INVALID_FIELD", "'modelProfileId' must be a model profile id or null");
+  }
+  return value;
+}
+
+function parseModelProfileTextInput(value, name, maxLength, { required = false } = {}) {
+  if (value === undefined || value === null) {
+    if (required) {
+      throw new ApiError(400, "INVALID_FIELD", `'${name}' is required`);
+    }
+    return "";
+  }
+  const normalized = stringField(value, name, { maxLength }).trim();
+  if (required && normalized === "") {
+    throw new ApiError(400, "INVALID_FIELD", `'${name}' cannot be empty`);
+  }
+  return normalized;
+}
+
+function parseModelProfileUrl(value, name) {
+  if (value === undefined || value === null) return "";
+  const normalized = stringField(value, name, { maxLength: 2_048 }).trim();
+  if (normalized === "") return "";
+  let parsed;
+  try {
+    parsed = new URL(normalized);
+  } catch {
+    throw new ApiError(400, "INVALID_FIELD", `'${name}' must be a valid http(s) URL`);
+  }
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    throw new ApiError(400, "INVALID_FIELD", `'${name}' must use HTTP or HTTPS`);
+  }
+  return normalized;
+}
+
+const MODEL_PROFILE_KEYS = new Set([
+  "name",
+  "provider",
+  "baseUrl",
+  "authToken",
+  "model",
+  "smallFastModel",
+  "description",
+]);
+
+function parseModelProfileFields(body, { partial }) {
+  assertPlainObject(body);
+  assertAllowedKeys(body, MODEL_PROFILE_KEYS);
+  const fields = [
+    "name",
+    "provider",
+    "baseUrl",
+    "authToken",
+    "model",
+    "smallFastModel",
+    "description",
+  ];
+  const input = {};
+  for (const field of fields) {
+    if (partial && !Object.hasOwn(body, field)) continue;
+    switch (field) {
+      case "baseUrl":
+        input.baseUrl = parseModelProfileUrl(body.baseUrl, "baseUrl") || null;
+        break;
+      case "name":
+        input.name = parseModelProfileTextInput(body.name, "name", 120, { required: !partial });
+        break;
+      case "provider":
+        input.provider = parseModelProfileTextInput(body.provider, "provider", 80);
+        break;
+      case "authToken":
+        input.authToken = parseModelProfileTextInput(body.authToken, "authToken", 4_096) || null;
+        break;
+      case "model":
+        input.model = parseModelProfileTextInput(body.model, "model", 256);
+        break;
+      case "smallFastModel":
+        input.smallFastModel = parseModelProfileTextInput(body.smallFastModel, "smallFastModel", 256) || null;
+        break;
+      case "description":
+        input.description = parseModelProfileTextInput(body.description, "description", 2_000) || null;
+        break;
+    }
+  }
+  if (partial && Object.keys(input).length === 0) {
+    throw new ApiError(400, "INVALID_BODY", "PATCH requires at least one model profile field");
   }
   return input;
 }
@@ -2308,6 +2408,56 @@ export function createTaskboardServer(options = {}) {
           return sendJson(response, 200, result);
         }
         return methodNotAllowed(response, ["GET", "POST", "DELETE"]);
+      }
+
+      if (pathname === "/api/local/model-profiles") {
+        assertNoQuery(url.searchParams, "/api/local/model-profiles");
+        if (request.method === "GET") {
+          return sendJson(response, 200, {
+            profiles: database.listModelProfiles(),
+            defaultProfileId: database.getDefaultModelProfileId(),
+          });
+        }
+        if (request.method === "POST") {
+          const profile = database.createModelProfile(
+            parseModelProfileFields(await readJson(request), { partial: false }),
+          );
+          return sendJson(response, 201, { profile });
+        }
+        return methodNotAllowed(response, ["GET", "POST"]);
+      }
+
+      if (pathname === "/api/local/model-profiles/default") {
+        if (request.method !== "PUT") return methodNotAllowed(response, ["PUT"]);
+        assertNoQuery(url.searchParams, "PUT /api/local/model-profiles/default");
+        const body = await readJson(request);
+        assertPlainObject(body);
+        assertAllowedKeys(body, new Set(["profileId"]));
+        const profileId = body.profileId === null
+          ? null
+          : stringField(body.profileId, "profileId", { required: true, maxLength: 128 });
+        return sendJson(response, 200, {
+          defaultProfileId: database.setDefaultModelProfileId(profileId),
+        });
+      }
+
+      const modelProfileItemRoute = pathname.match(/^\/api\/local\/model-profiles\/([^/]+)$/);
+      if (modelProfileItemRoute) {
+        assertNoQuery(url.searchParams, "/api/local/model-profiles/:id");
+        const profileId = decodeRouteSegment(modelProfileItemRoute[1], "Model profile id");
+        if (request.method === "PATCH") {
+          const profile = database.updateModelProfile(
+            profileId,
+            parseModelProfileFields(await readJson(request), { partial: true }),
+          );
+          return sendJson(response, 200, { profile });
+        }
+        if (request.method === "DELETE") {
+          await assertEmptyRequestBody(request, "DELETE /api/local/model-profiles/:id");
+          database.deleteModelProfile(profileId);
+          return sendEmpty(response, 204);
+        }
+        return methodNotAllowed(response, ["PATCH", "DELETE"]);
       }
 
       if (pathname === "/api/local/automation") {

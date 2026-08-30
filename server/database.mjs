@@ -265,6 +265,7 @@ function taskFromRow(row) {
     externalKey: row.external_key ?? null,
     externalUrl: row.external_url ?? null,
     archivedAt: row.archived_at,
+    modelProfileId: row.model_profile_id ?? null,
     version: row.version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -413,10 +414,26 @@ function aiChatThreadFromRow(row) {
     },
     claudeThreadId: row.codex_thread_id,
     model: row.model,
+    modelProfileId: row.model_profile_id ?? null,
     reasoningEffort: row.reasoning_effort,
     sandbox: row.sandbox,
     currentRun: null,
     latestTodo: null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function modelProfileFromRow(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    provider: row.provider,
+    baseUrl: row.base_url,
+    authToken: row.auth_token,
+    model: row.model,
+    smallFastModel: row.small_fast_model,
+    description: row.description,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -602,6 +619,24 @@ export class TaskboardDatabase {
         updated_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS model_profiles (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        provider TEXT NOT NULL DEFAULT '',
+        base_url TEXT,
+        auth_token TEXT,
+        model TEXT NOT NULL DEFAULT '',
+        small_fast_model TEXT,
+        description TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS app_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS ai_chat_threads (
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL,
@@ -741,6 +776,13 @@ export class TaskboardDatabase {
     }
     if (!migratedTaskColumns.some((column) => column.name === "external_url")) {
       this.database.exec("ALTER TABLE tasks ADD COLUMN external_url TEXT");
+    }
+    if (!migratedTaskColumns.some((column) => column.name === "model_profile_id")) {
+      this.database.exec("ALTER TABLE tasks ADD COLUMN model_profile_id TEXT");
+    }
+    const threadColumns = this.database.prepare("PRAGMA table_info(ai_chat_threads)").all();
+    if (!threadColumns.some((column) => column.name === "model_profile_id")) {
+      this.database.exec("ALTER TABLE ai_chat_threads ADD COLUMN model_profile_id TEXT");
     }
     this.database.exec(`
       DROP INDEX IF EXISTS tasks_external_source_id;
@@ -1614,6 +1656,123 @@ export class TaskboardDatabase {
     return row ? projectReadmeAttachmentFromRow(row) : null;
   }
 
+  listModelProfiles() {
+    return this.database.prepare(`
+      SELECT * FROM model_profiles ORDER BY created_at, id
+    `).all().map(modelProfileFromRow);
+  }
+
+  getModelProfile(id) {
+    const row = this.database.prepare("SELECT * FROM model_profiles WHERE id = ?").get(id);
+    return row ? modelProfileFromRow(row) : null;
+  }
+
+  createModelProfile(input) {
+    const id = randomUUID();
+    const timestamp = now();
+    this.database.prepare(`
+      INSERT INTO model_profiles (
+        id, name, provider, base_url, auth_token, model, small_fast_model,
+        description, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      input.name,
+      input.provider,
+      input.baseUrl,
+      input.authToken,
+      input.model,
+      input.smallFastModel,
+      input.description,
+      timestamp,
+      timestamp,
+    );
+    return this.getModelProfile(id);
+  }
+
+  updateModelProfile(id, changes) {
+    const current = this.getModelProfile(id);
+    if (!current) {
+      throw new ApiError(404, "MODEL_PROFILE_NOT_FOUND", `Model profile '${id}' does not exist`);
+    }
+    const columns = {
+      name: "name",
+      provider: "provider",
+      baseUrl: "base_url",
+      authToken: "auth_token",
+      model: "model",
+      smallFastModel: "small_fast_model",
+      description: "description",
+    };
+    const assignments = [];
+    const values = [];
+    for (const [key, column] of Object.entries(columns)) {
+      if (!Object.hasOwn(changes, key)) continue;
+      assignments.push(`${column} = ?`);
+      values.push(changes[key]);
+    }
+    if (assignments.length === 0) return current;
+    assignments.push("updated_at = ?");
+    values.push(now(), id);
+    this.database.prepare(`UPDATE model_profiles SET ${assignments.join(", ")} WHERE id = ?`).run(...values);
+    return this.getModelProfile(id);
+  }
+
+  deleteModelProfile(id) {
+    const current = this.getModelProfile(id);
+    if (!current) {
+      throw new ApiError(404, "MODEL_PROFILE_NOT_FOUND", `Model profile '${id}' does not exist`);
+    }
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      this.database.prepare("DELETE FROM model_profiles WHERE id = ?").run(id);
+      this.database.prepare("UPDATE tasks SET model_profile_id = NULL WHERE model_profile_id = ?").run(id);
+      this.database.prepare("UPDATE ai_chat_threads SET model_profile_id = NULL WHERE model_profile_id = ?").run(id);
+      this.database.prepare("DELETE FROM app_settings WHERE key = 'defaultModelProfileId' AND value = ?").run(id);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return current;
+  }
+
+  getDefaultModelProfileId() {
+    const row = this.database.prepare(
+      "SELECT value FROM app_settings WHERE key = 'defaultModelProfileId'",
+    ).get();
+    return row?.value ?? null;
+  }
+
+  setDefaultModelProfileId(id) {
+    if (id === null) {
+      this.database.prepare("DELETE FROM app_settings WHERE key = 'defaultModelProfileId'").run();
+      return null;
+    }
+    if (!this.getModelProfile(id)) {
+      throw new ApiError(404, "MODEL_PROFILE_NOT_FOUND", `Model profile '${id}' does not exist`);
+    }
+    this.database.prepare(`
+      INSERT INTO app_settings (key, value) VALUES ('defaultModelProfileId', ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `).run(id);
+    return id;
+  }
+
+  // Priority: an explicit profile id (issue selection, automation selection),
+  // then the global default profile. Unknown ids fall through to the default so
+  // deleting a profile never breaks issue or automation turns.
+  resolveModelProfile(preferredId) {
+    const preferred = typeof preferredId === "string" && preferredId ? this.getModelProfile(preferredId) : null;
+    if (preferred) return preferred;
+    const defaultId = this.getDefaultModelProfileId();
+    if (defaultId && defaultId !== preferredId) {
+      const fallback = this.getModelProfile(defaultId);
+      if (fallback) return fallback;
+    }
+    return null;
+  }
+
   listAiChatThreads() {
     const rows = this.database.prepare(`
       SELECT * FROM ai_chat_threads
@@ -1675,9 +1834,9 @@ export class TaskboardDatabase {
         id, title, status,
         origin_project_id, origin_project_name, origin_workspace_path,
         origin_issue_id, origin_issue_identifier,
-        codex_thread_id, model, reasoning_effort, sandbox,
+        codex_thread_id, model, model_profile_id, reasoning_effort, sandbox,
         created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       input.title,
@@ -1689,6 +1848,7 @@ export class TaskboardDatabase {
       input.origin.issueIdentifier ?? null,
       input.claudeThreadId ?? null,
       input.model,
+      input.modelProfileId ?? null,
       input.reasoningEffort,
       input.sandbox,
       timestamp,
@@ -2069,8 +2229,9 @@ export class TaskboardDatabase {
           assignee_type, assignee_id, assignee_name, assignee_avatar_url,
           git_branch, worktree_path, worktree_branch,
           start_date, due_date, recurrence_interval, recurrence_unit,
+          model_profile_id,
           archived_at, version, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1, ?, ?)
       `).run(
         id,
         identifier,
@@ -2097,6 +2258,7 @@ export class TaskboardDatabase {
         input.dueDate,
         input.recurrence?.interval ?? null,
         input.recurrence?.unit ?? null,
+        input.modelProfileId ?? null,
         timestamp,
         timestamp,
       );
@@ -2156,6 +2318,7 @@ export class TaskboardDatabase {
       labels: "labels",
       startDate: "start_date",
       dueDate: "due_date",
+      modelProfileId: "model_profile_id",
     };
     const assignments = [];
     const values = [];

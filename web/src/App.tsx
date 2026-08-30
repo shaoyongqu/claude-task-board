@@ -39,6 +39,7 @@ import {
   getProjectIntegration,
   getSetupStatus,
   installSkill as installSkillRequest,
+  listModelProfiles,
   removeProjectIntegration as removeProjectIntegrationRequest,
   setupProjectIntegration as setupProjectIntegrationRequest,
   type LocalSession,
@@ -77,6 +78,7 @@ import { DashboardView } from "./components/DashboardView";
 import { ProjectReadmeView } from "./components/ProjectReadmeView";
 import { IssueListView } from "./components/IssueListView";
 import { JiraConnectionDialog } from "./components/JiraConnectionDialog";
+import { ModelProfilesDialog } from "./components/ModelProfilesDialog";
 import { ArchivedTasksColumn, OtherTasksPanel } from "./components/OtherTasksPanel";
 import {
   resolveInlineMediaMarkdown,
@@ -144,6 +146,7 @@ import {
   type IssueRelationOrigin,
   type IssueRelationType,
   type JiraConnection,
+  type ModelProfile,
   type Project,
   type Task,
   type TaskboardMetadata,
@@ -243,12 +246,13 @@ interface ProjectAutomationRecord {
   quota?: AutomationQuotaStatus;
   intervalMinutes: AutomationIntervalMinutes;
   model: string;
+  modelProfileId?: string | null;
   reasoningEffort: string;
 }
 
 type ProjectAutomationOptions = Pick<
   ProjectAutomationRecord,
-  "enabledByUser" | "quotaAware" | "intervalMinutes" | "model" | "reasoningEffort"
+  "enabledByUser" | "quotaAware" | "intervalMinutes" | "model" | "modelProfileId" | "reasoningEffort"
 >;
 
 interface AutomationRequestContext {
@@ -274,6 +278,7 @@ interface AutomationHostItem {
   id: string;
   status: ProjectAutomationStatus;
   model: string;
+  modelProfileId?: string | null;
   reasoningEffort: string;
   rrule: string;
 }
@@ -294,6 +299,7 @@ interface AutomationHostResponse {
     quotaAware: boolean;
     intervalMinutes: AutomationIntervalMinutes;
     model: string;
+    modelProfileId?: string | null;
     reasoningEffort: string;
   };
   error?: string;
@@ -530,6 +536,9 @@ function readProjectAutomations(): ProjectAutomations {
         || (candidate.status === "ACTIVE" && !candidate.automationId)
         || typeof enabledByUser !== "boolean"
         || typeof quotaAware !== "boolean"
+        || (candidate.modelProfileId !== undefined
+          && candidate.modelProfileId !== null
+          && typeof candidate.modelProfileId !== "string")
       ) continue;
       const quota = isAutomationQuotaStatus(candidate.quota) ? candidate.quota : undefined;
       result[projectId] = {
@@ -544,6 +553,7 @@ function readProjectAutomations(): ProjectAutomations {
         ...(quota ? { quota } : {}),
         intervalMinutes: candidate.intervalMinutes ?? 5,
         model,
+        modelProfileId: candidate.modelProfileId ?? null,
         reasoningEffort,
       };
     }
@@ -582,6 +592,9 @@ function isAutomationHostPolicy(
     && isAutomationIntervalMinutes(value.intervalMinutes)
     && typeof value.model === "string"
     && Boolean(value.model.trim())
+    && (value.modelProfileId === undefined
+      || value.modelProfileId === null
+      || typeof value.modelProfileId === "string")
     && typeof value.reasoningEffort === "string"
     && Boolean(value.reasoningEffort.trim()),
   );
@@ -932,6 +945,9 @@ export function App() {
   } | null>(null);
   const [automationCatalogLoading, setAutomationCatalogLoading] = useState(false);
   const [automationCatalogError, setAutomationCatalogError] = useState<string | null>(null);
+  const [modelProfiles, setModelProfiles] = useState<ModelProfile[]>([]);
+  const [defaultModelProfileId, setDefaultModelProfileId] = useState<string | null>(null);
+  const [modelProfilesOpen, setModelProfilesOpen] = useState(false);
   const [announcement, setAnnouncementValue] = useState("");
   const [undoNotice, setUndoNotice] = useState<UndoNotice | null>(null);
   const projectsRequestRef = useRef(0);
@@ -1050,6 +1066,19 @@ export function App() {
       window.clearTimeout(retryTimer);
     };
   }, [automationCatalogAttempt, localAiChatAvailable, selectedProject?.id, text]);
+  const refreshModelProfiles = useCallback(async () => {
+    try {
+      const snapshot = await listModelProfiles();
+      setModelProfiles(snapshot.profiles);
+      setDefaultModelProfileId(snapshot.defaultProfileId);
+    } catch {
+      // The pickers simply stay hidden until profiles load; the dialog shows
+      // its own load state on open.
+    }
+  }, []);
+  useEffect(() => {
+    void refreshModelProfiles();
+  }, [refreshModelProfiles]);
   const aiImportProjectId = hasLoadedTasks
     && tasks.length === 0
     && selectedProject
@@ -1318,6 +1347,7 @@ export function App() {
       quotaAware: options.quotaAware,
       intervalMinutes: options.intervalMinutes,
       model: options.model,
+      modelProfileId: options.modelProfileId ?? null,
       reasoningEffort: options.reasoningEffort,
     });
     return response as unknown as AutomationHostResponse;
@@ -1364,6 +1394,7 @@ export function App() {
           ...(response.quota ? { quota: response.quota } : {}),
           intervalMinutes: policy.intervalMinutes,
           model: policy.model,
+          modelProfileId: policy.modelProfileId ?? null,
           reasoningEffort: policy.reasoningEffort,
         });
       } catch (error) {
@@ -1404,6 +1435,7 @@ export function App() {
           quotaAware: false,
           intervalMinutes: 5,
           model: defaultModel.slug,
+          modelProfileId: null,
           reasoningEffort: defaultModel.defaultReasoningEffort,
         };
       }
@@ -1435,6 +1467,7 @@ export function App() {
           ...(response.quota ? { quota: response.quota } : {}),
           intervalMinutes: policy.intervalMinutes,
           model: policy.model,
+          modelProfileId: policy.modelProfileId ?? null,
           reasoningEffort: policy.reasoningEffort,
         });
         return true;
@@ -1473,6 +1506,7 @@ export function App() {
                 ...(reapplied.quota ? { quota: reapplied.quota } : {}),
                 intervalMinutes: reappliedPolicy.intervalMinutes,
                 model: reappliedPolicy.model,
+                modelProfileId: reappliedPolicy.modelProfileId ?? null,
                 reasoningEffort: reappliedPolicy.reasoningEffort,
               });
               return true;
@@ -1491,6 +1525,7 @@ export function App() {
             ...(response.quota ? { quota: response.quota } : {}),
             intervalMinutes: policy?.intervalMinutes ?? stored.intervalMinutes,
             model: policy?.model ?? stored.model,
+            modelProfileId: policy?.modelProfileId ?? stored.modelProfileId ?? null,
             reasoningEffort: policy?.reasoningEffort ?? stored.reasoningEffort,
           });
         }
@@ -1516,6 +1551,7 @@ export function App() {
         ),
         intervalMinutes,
         model: policy?.model ?? item.model,
+        modelProfileId: policy?.modelProfileId ?? item.modelProfileId ?? null,
         reasoningEffort: policy?.reasoningEffort ?? item.reasoningEffort,
       });
       return true;
@@ -3027,9 +3063,9 @@ export function App() {
       return;
     }
     if (conversation.threadBinding) {
-      openThread(conversation.threadBinding);
+      openThread(conversation.threadBinding, conversation.title);
     } else if (conversation.legacyLocalThreadId) {
-      openLegacyLocalThread(conversation.legacyLocalThreadId);
+      openLegacyLocalThread(conversation.legacyLocalThreadId, conversation.title);
     }
   }
 
@@ -3592,12 +3628,25 @@ export function App() {
 
 
           <div className="header-actions">
+            {localAiChatAvailable && (
+              <button
+                type="button"
+                className="header-model-trigger no-drag"
+                onClick={() => setModelProfilesOpen(true)}
+                aria-label={text("模型管理", "Model management")}
+                title={text("模型管理", "Model management")}
+              >
+                <LinearIcon name="displayOptions" />
+                <span>{text("模型管理", "Models")}</span>
+              </button>
+            )}
             {selectedProject && (
               <ProjectAutomationMenu
                 automation={selectedProjectAutomation
                   ? { ...selectedProjectAutomation, quota: quotaStatus ?? selectedProjectAutomation.quota }
                   : selectedProjectAutomation}
                 models={automationModels}
+                modelProfiles={modelProfiles}
                 pending={automationPending || automationCatalogLoading}
                 error={automationCatalogError ?? automationError}
                 unavailableReason={automationProjectContext.unavailableReason}
@@ -4309,6 +4358,15 @@ export function App() {
         />
       )}
 
+      {modelProfilesOpen && (
+        <ModelProfilesDialog
+          profiles={modelProfiles}
+          defaultProfileId={defaultModelProfileId}
+          onClose={() => setModelProfilesOpen(false)}
+          onChanged={() => void refreshModelProfiles()}
+        />
+      )}
+
       {projectCreateOpen && (
         <div
           className="delete-backdrop"
@@ -4532,6 +4590,7 @@ export function App() {
             ? null
             : newTaskDraft.draft}
           labels={projects.find((project) => project.id === editorProjectId)?.labels ?? []}
+          modelProfiles={localAiChatAvailable ? modelProfiles : []}
           currentUser={currentUser}
           developmentScan={developmentScan}
           developmentScanLoading={developmentScanLoading}

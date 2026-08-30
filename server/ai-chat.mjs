@@ -14,6 +14,7 @@ import {
 import {
   buildClaudeArgs,
   buildClaudePrompt,
+  modelProfileEnvironment,
   normalizeClaudeEvent,
   spawnClaudeTurn,
 } from "./ai-chat-process.mjs";
@@ -220,6 +221,9 @@ export class AiChatService {
         ...(issue ? { issueId: issue.id, issueIdentifier: issue.identifier } : {}),
       },
       model: model.slug,
+      modelProfileId: input.modelProfileId !== undefined
+        ? input.modelProfileId
+        : issue?.modelProfileId ?? null,
       reasoningEffort,
       sandbox,
     });
@@ -353,7 +357,11 @@ export class AiChatService {
     try {
       const resumingThreadId = thread.claudeThreadId;
       const turnSessionId = resumingThreadId ?? randomUUID();
-      const args = buildClaudeArgs(thread, resolved.addDirectories, turnSessionId);
+      const modelProfile = this.database.resolveModelProfile(thread.modelProfileId);
+      // A profile with an explicit model drives Claude Code through
+      // ANTHROPIC_MODEL, so the --model alias flag must not override it.
+      const argThread = modelProfile?.model ? { ...thread, model: "default" } : thread;
+      const args = buildClaudeArgs(argThread, resolved.addDirectories, turnSessionId);
       const prompt = buildClaudePrompt(
         thread,
         {
@@ -411,13 +419,17 @@ export class AiChatService {
         ...this.processEnv,
         CLAUDE_THREAD_ID: turnSessionId,
       };
+      const extraEnv = {
+        ...modelProfileEnvironment(modelProfile),
+        ...(this.boardBaseUrl ? { CLAUDE_TASKBOARD_URL: this.boardBaseUrl } : {}),
+      };
       const { child, completion } = spawnClaudeTurn({
         executable: this.claudeExecutable,
         args,
         prompt,
         env: turnEnv,
         cwd: resolved.workspacePath,
-        extraEnv: this.boardBaseUrl ? { CLAUDE_TASKBOARD_URL: this.boardBaseUrl } : {},
+        extraEnv,
         onRawEvent: (raw) => {
           for (const normalized of normalizeClaudeEvent(raw, pendingTools)) {
             if (normalized.kind === "thread.started") {

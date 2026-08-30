@@ -36,7 +36,7 @@ const baseRequest = {
 test("the automation host request accepts local project automation options", () => {
   assert.deepEqual(
     parseTaskboardAutomationHostRequest(baseRequest),
-    { ...baseRequest, remoteProjects: [] },
+    { ...baseRequest, remoteProjects: [], modelProfileId: null },
   );
   assert.equal(
     parseTaskboardAutomationHostRequest({ ...baseRequest, operation: "delete" }),
@@ -52,6 +52,17 @@ test("the automation host request accepts local project automation options", () 
   );
   assert.equal(
     parseTaskboardAutomationHostRequest({ ...baseRequest, intervalMinutes: 7 }),
+    null,
+  );
+  assert.equal(
+    parseTaskboardAutomationHostRequest({
+      ...baseRequest,
+      modelProfileId: "kimi-profile",
+    }).modelProfileId,
+    "kimi-profile",
+  );
+  assert.equal(
+    parseTaskboardAutomationHostRequest({ ...baseRequest, modelProfileId: 42 }),
     null,
   );
 });

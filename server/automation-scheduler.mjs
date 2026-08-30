@@ -8,7 +8,7 @@ import {
   buildTaskboardAutomationPrompt,
   taskboardAutomationPolicyOperation,
 } from "../shared/taskboard-automation.mjs";
-import { spawnClaudeTurn } from "./ai-chat-process.mjs";
+import { modelProfileEnvironment, spawnClaudeTurn } from "./ai-chat-process.mjs";
 import { ApiError } from "./database.mjs";
 import { getQuotaStatus } from "./quota.mjs";
 
@@ -94,6 +94,7 @@ export class LocalAutomationScheduler {
       id: entry.id,
       status: entry.timer ? "ACTIVE" : "PAUSED",
       model: entry.request.model,
+      modelProfileId: entry.request.modelProfileId ?? null,
       reasoningEffort: entry.request.reasoningEffort,
       rrule: `RRULE:FREQ=MINUTELY;INTERVAL=${entry.request.intervalMinutes}`,
       nextRunAt: entry.timer ? entry.nextRunAt : null,
@@ -112,6 +113,7 @@ export class LocalAutomationScheduler {
       quotaAware: request.quotaAware,
       intervalMinutes: request.intervalMinutes,
       model: request.model,
+      modelProfileId: request.modelProfileId ?? null,
       reasoningEffort: request.reasoningEffort,
     };
   }
@@ -201,6 +203,7 @@ export class LocalAutomationScheduler {
       reasoningEffort: request.reasoningEffort,
       claudeThreadId: null,
     };
+    const modelProfile = this.database.resolveModelProfile(request.modelProfileId ?? null);
     const args = [
       "--print",
       "--output-format",
@@ -225,7 +228,10 @@ export class LocalAutomationScheduler {
         prompt: buildTaskboardAutomationPrompt(request),
         env: { ...this.processEnv, CLAUDE_THREAD_ID: sessionId },
         cwd: request.workspacePath,
-        extraEnv: this.boardBaseUrl ? { CLAUDE_TASKBOARD_URL: this.boardBaseUrl } : {},
+        extraEnv: {
+          ...modelProfileEnvironment(modelProfile),
+          ...(this.boardBaseUrl ? { CLAUDE_TASKBOARD_URL: this.boardBaseUrl } : {}),
+        },
         onRawEvent: () => {},
       });
       entry.child = child;

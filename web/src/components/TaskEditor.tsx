@@ -13,6 +13,7 @@ import {
   type ActorIdentity,
   type DevelopmentContext,
   type DevelopmentScan,
+  type ModelProfile,
   type Recurrence,
   type Task,
   type TaskDraft,
@@ -96,6 +97,7 @@ export interface NewTaskEditorDraft {
   startDate: string;
   dueDate: string;
   recurrence: Recurrence | null;
+  modelProfileId: string | null;
   attachments: File[];
   relations: NewTaskRelationDraft;
 }
@@ -110,6 +112,7 @@ interface TaskEditorProps {
   initialStatus: TaskStatus;
   initialDraft: NewTaskEditorDraft | null;
   labels: string[];
+  modelProfiles?: ModelProfile[];
   currentUser: ActorIdentity;
   developmentScan: DevelopmentScan;
   developmentScanLoading: boolean;
@@ -169,6 +172,7 @@ export function TaskEditor({
   initialStatus,
   initialDraft,
   labels: availableLabels,
+  modelProfiles,
   currentUser,
   developmentScan,
   developmentScanLoading,
@@ -197,11 +201,14 @@ export function TaskEditor({
   const [startDate] = useState(task?.startDate ?? initialDraft?.startDate ?? "");
   const [dueDate, setDueDate] = useState(task?.dueDate ?? initialDraft?.dueDate ?? "");
   const [recurrence, setRecurrence] = useState<Recurrence | null>(task?.recurrence ?? initialDraft?.recurrence ?? null);
+  const [modelProfileId, setModelProfileId] = useState<string | null>(
+    task?.modelProfileId ?? initialDraft?.modelProfileId ?? null,
+  );
   const [parentId, setParentId] = useState<string | null>(initialDraft?.relations.parentId ?? null);
   const [relatedIds, setRelatedIds] = useState<string[]>(initialDraft?.relations.relatedIds ?? []);
   const [subIssueIds, setSubIssueIds] = useState<string[]>(initialDraft?.relations.subIssueIds ?? []);
   const [createMore, setCreateMore] = useState(false);
-  const [menu, setMenu] = useState<"project" | "status" | "priority" | "assignee" | "labels" | "development" | "more" | "due" | "recurrence" | null>(null);
+  const [menu, setMenu] = useState<"project" | "status" | "priority" | "assignee" | "labels" | "development" | "more" | "due" | "recurrence" | "modelProfile" | null>(null);
   const [relationMenu, setRelationMenu] = useState<DraftRelationMenu | null>(null);
   const [moreMenuPosition, setMoreMenuPosition] = useState<{ right: number; bottom: number } | null>(null);
   const [expanded, setExpanded] = useState(false);
@@ -402,6 +409,7 @@ export function TaskEditor({
         startDate: startDate || null,
         dueDate: dueDate || null,
         recurrence,
+        modelProfileId,
       }, attachments, inlineMediaImages(descriptionSegments), task ? undefined : {
         keepOpen: createMore,
         relations: { parentId, relatedIds, subIssueIds },
@@ -481,6 +489,7 @@ export function TaskEditor({
       startDate,
       dueDate,
       recurrence,
+      modelProfileId,
       attachments,
       relations: { parentId, relatedIds, subIssueIds },
     });
@@ -664,6 +673,29 @@ export function TaskEditor({
               onChange={setSelectedLabels}
               onCreateLabel={onCreateLabel}
             />
+
+            {(modelProfiles?.length ?? 0) > 0 && (
+              <TaskPropertyPicker
+                value={modelProfileId ?? ""}
+                options={[
+                  {
+                    value: "",
+                    label: text("模型配置 · 默认", "Model · default"),
+                    icon: <TaskboardIcon name="projectFolder" />,
+                  },
+                  ...modelProfiles!.map((profile) => ({
+                    value: profile.id,
+                    label: profile.model ? `${profile.name} · ${profile.model}` : profile.name,
+                    icon: <TaskboardIcon name="projectFolder" />,
+                  })),
+                ]}
+                open={menu === "modelProfile"}
+                triggerClassName="property-control"
+                ariaLabel={text("模型配置", "Model profile")}
+                onOpenChange={(open) => setMenu(open ? "modelProfile" : null)}
+                onChange={(value) => setModelProfileId(value || null)}
+              />
+            )}
 
             <TaskPropertyPicker
               value={contextValue(developmentContext)}

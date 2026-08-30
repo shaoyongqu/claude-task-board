@@ -23,6 +23,7 @@ const HOST_REQUEST_FIELDS = new Set([
   "quotaAware",
   "intervalMinutes",
   "model",
+  "modelProfileId",
   "reasoningEffort",
 ]);
 
@@ -46,6 +47,11 @@ export function parseTaskboardAutomationHostRequest(value) {
   if (!Array.isArray(remoteProjects) || remoteProjects.length > 0) return null;
   if (!INTERVAL_MINUTES.has(value.intervalMinutes)) return null;
   if (!validText(value.model, 256) || !validText(value.reasoningEffort, 100)) return null;
+  if (
+    value.modelProfileId !== undefined
+    && value.modelProfileId !== null
+    && !validProfileId(value.modelProfileId)
+  ) return null;
   if (value.automationId !== undefined && !validText(value.automationId, 256)) return null;
   if (typeof value.enabledByUser !== "boolean" || typeof value.quotaAware !== "boolean") return null;
 
@@ -67,6 +73,7 @@ export function parseTaskboardAutomationHostRequest(value) {
     quotaAware: value.quotaAware,
     intervalMinutes: value.intervalMinutes,
     model: value.model,
+    modelProfileId: value.modelProfileId ?? null,
     reasoningEffort: value.reasoningEffort,
   };
 }
@@ -143,6 +150,13 @@ function validText(value, maxLength) {
 }
 
 function validProjectId(value) {
+  return typeof value === "string"
+    && value.length > 0
+    && value.length <= 128
+    && /^[a-z0-9._-]+$/i.test(value);
+}
+
+function validProfileId(value) {
   return typeof value === "string"
     && value.length > 0
     && value.length <= 128

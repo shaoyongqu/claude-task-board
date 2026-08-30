@@ -256,6 +256,19 @@ export function normalizeClaudeEvent(raw, pendingTools = new Map()) {
   return [];
 }
 
+// Per-session vendor environment for a resolved model profile (ccswitch-style
+// provider preset). Passed through extraEnv so every spawned `claude` turn is
+// independent: profiles never rewrite ~/.claude/settings.json.
+export function modelProfileEnvironment(profile) {
+  if (!profile) return {};
+  const env = {};
+  if (profile.baseUrl) env.ANTHROPIC_BASE_URL = profile.baseUrl;
+  if (profile.authToken) env.ANTHROPIC_AUTH_TOKEN = profile.authToken;
+  if (profile.model) env.ANTHROPIC_MODEL = profile.model;
+  if (profile.smallFastModel) env.ANTHROPIC_SMALL_FAST_MODEL = profile.smallFastModel;
+  return env;
+}
+
 export function buildClaudeArgs(thread, addDirectories = [], sessionId = null) {
   const permission = thread.sandbox === "read-only"
     ? ["--permission-mode", "plan"]

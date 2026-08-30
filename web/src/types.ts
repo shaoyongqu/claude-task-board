@@ -262,6 +262,19 @@ export interface AiChatCatalog {
   sandboxes: string[];
 }
 
+export interface ModelProfile {
+  id: string;
+  name: string;
+  provider: string;
+  baseUrl: string | null;
+  authToken: string | null;
+  model: string;
+  smallFastModel: string | null;
+  description: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface AiChatOrigin {
   projectId: string;
   projectName: string;
@@ -294,6 +307,7 @@ export interface AiChatThread {
   origin: AiChatOrigin;
   claudeThreadId: string | null;
   model: string;
+  modelProfileId: string | null;
   reasoningEffort: string;
   sandbox: AiChatSandbox;
   createdAt: string;
@@ -431,6 +445,7 @@ export interface Task {
   externalKey?: string | null;
   externalUrl: string | null;
   archivedAt: string | null;
+  modelProfileId: string | null;
   relations: TaskRelations;
   version: number;
   createdAt: string;
@@ -527,6 +542,7 @@ export interface TaskDraft {
   startDate: string | null;
   dueDate: string | null;
   recurrence: Recurrence | null;
+  modelProfileId?: string | null;
 }
 
 export interface TaskEvent {

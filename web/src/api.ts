@@ -19,6 +19,7 @@ import type {
   IssueRelationOrigin,
   IssueRelationType,
   JiraConnection,
+  ModelProfile,
   Project,
   ProjectReadme,
   ProjectReadmeAttachment,
@@ -256,6 +257,59 @@ export async function postAutomationRequest(
     body: JSON.stringify(payload),
     signal: AbortSignal.timeout(30_000),
   });
+}
+
+export interface ModelProfileInput {
+  name: string;
+  provider?: string;
+  baseUrl?: string | null;
+  authToken?: string | null;
+  model?: string;
+  smallFastModel?: string | null;
+  description?: string | null;
+}
+
+export interface ModelProfilesSnapshot {
+  profiles: ModelProfile[];
+  defaultProfileId: string | null;
+}
+
+export async function listModelProfiles(signal?: AbortSignal): Promise<ModelProfilesSnapshot> {
+  return request<ModelProfilesSnapshot>("/api/local/model-profiles", { signal });
+}
+
+export async function createModelProfile(input: ModelProfileInput): Promise<ModelProfile> {
+  const data = await request<{ profile: ModelProfile }>("/api/local/model-profiles", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+  return data.profile;
+}
+
+export async function updateModelProfile(
+  profileId: string,
+  input: Partial<ModelProfileInput>,
+): Promise<ModelProfile> {
+  const data = await request<{ profile: ModelProfile }>(
+    `/api/local/model-profiles/${encodeURIComponent(profileId)}`,
+    { method: "PATCH", body: JSON.stringify(input) },
+  );
+  return data.profile;
+}
+
+export async function deleteModelProfile(profileId: string): Promise<void> {
+  await request<void>(
+    `/api/local/model-profiles/${encodeURIComponent(profileId)}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function setDefaultModelProfile(profileId: string | null): Promise<string | null> {
+  const data = await request<{ defaultProfileId: string | null }>(
+    "/api/local/model-profiles/default",
+    { method: "PUT", body: JSON.stringify({ profileId }) },
+  );
+  return data.defaultProfileId;
 }
 
 export async function getAiChatCatalog(
