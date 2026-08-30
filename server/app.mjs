@@ -3262,6 +3262,20 @@ export function createTaskboardServer(options = {}) {
             threadBinding,
             assigneeTarget,
           } = resolveInputThreadBinding(parseTaskPatch(await readJson(request)));
+          // Same rework release as the move route: a human sending an issue
+          // back to todo via a status edit clears the previous session's
+          // ownership.
+          let releasedThreadId = threadId;
+          let releasedThreadBinding = threadBinding;
+          if (
+            actor.type === "user"
+            && changes.status === "todo"
+            && releasedThreadBinding === undefined
+            && releasedThreadId === undefined
+          ) {
+            releasedThreadId = null;
+            releasedThreadBinding = null;
+          }
           const current = database.getTask(id);
           if (!current) throw new ApiError(404, "TASK_NOT_FOUND", `Task '${id}' does not exist`);
           let jiraChanged = false;
@@ -3302,7 +3316,7 @@ export function createTaskboardServer(options = {}) {
           }
           let task;
           try {
-            task = database.updateTask(id, version, changes, threadId, threadBinding, actor);
+            task = database.updateTask(id, version, changes, releasedThreadId, releasedThreadBinding, actor);
           } catch (error) {
             if (jiraChanged) {
               try {
@@ -3338,6 +3352,7 @@ export function createTaskboardServer(options = {}) {
           return sendEmpty(response, 204);
         }
         if (action === "move" && request.method === "POST") {
+          const actor = actorFromRequest(request);
           const move = resolveInputThreadBinding(parseMove(await readJson(request)));
           const current = database.getTask(id);
           if (!current) throw new ApiError(404, "TASK_NOT_FOUND", `Task '${id}' does not exist`);
@@ -3353,14 +3368,28 @@ export function createTaskboardServer(options = {}) {
             }
             await jira.moveTask(current, move.status);
           }
+          // Human rework release: moving an issue back to todo by hand
+          // releases the previous session's ownership so automation can
+          // re-claim it. Agent (taskctl) moves keep explicit bindings.
+          let threadId = move.threadId;
+          let threadBinding = move.threadBinding;
+          if (
+            actor.type === "user"
+            && move.status === "todo"
+            && threadBinding === undefined
+            && threadId === undefined
+          ) {
+            threadId = null;
+            threadBinding = null;
+          }
           const task = database.moveTask(
             id,
             move.version,
             move.status,
             move.sortOrder,
-            move.threadId,
-            move.threadBinding,
-            actorFromRequest(request),
+            threadId,
+            threadBinding,
+            actor,
           );
           events.emit("task.moved", { task });
           return sendJson(response, 200, { task });

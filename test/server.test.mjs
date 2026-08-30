@@ -856,6 +856,49 @@ test("an explicit thread binding is persisted verbatim on task writes", async ()
   assert.deepEqual(task.threadBinding, binding);
 });
 
+test("a human moving an issue back to todo releases the session binding", async () => {
+  const baseUrl = await startServer();
+  const agentHeaders = { "x-taskboard-client": "taskctl" };
+  const binding = {
+    threadId: "11111111-1111-4111-8111-111111111111",
+    codexProjectId: "C:\\work\\alpha",
+    codexProjectKind: "local",
+    codexHostId: "local",
+    workspacePath: "C:\\work\\alpha",
+  };
+  const task = (await request(baseUrl, "/api/tasks", {
+    method: "POST",
+    body: { title: "Rework me", threadId: binding.threadId, threadBinding: binding },
+  })).body.task;
+  assert.deepEqual(task.threadBinding, binding);
+
+  // Human (browser) move back to todo: ownership is released so automation
+  // can re-claim the issue.
+  const released = (await request(baseUrl, `/api/tasks/${task.id}/move`, {
+    method: "POST",
+    body: { version: task.version, status: "todo" },
+  })).body.task;
+  assert.equal(released.status, "todo");
+  assert.equal(released.threadId, null);
+  assert.equal(released.threadBinding, null);
+
+  // Agent (taskctl) moves keep their explicit bindings verbatim.
+  const rebound = (await request(baseUrl, `/api/tasks/${task.id}/move`, {
+    method: "POST",
+    headers: agentHeaders,
+    body: { version: released.version, status: "in_progress", threadId: binding.threadId, threadBinding: binding },
+  })).body.task;
+  assert.deepEqual(rebound.threadBinding, binding);
+
+  // Human PATCH rework (status edit) releases it again.
+  const patched = (await request(baseUrl, `/api/tasks/${task.id}`, {
+    method: "PATCH",
+    body: { version: rebound.version, status: "todo" },
+  })).body.task;
+  assert.equal(patched.threadId, null);
+  assert.equal(patched.threadBinding, null);
+});
+
 test("issues support parent, sub-issue, blocking, and related issue relationships", async () => {
   const baseUrl = await startServer();
   const createIssue = async (title, status = "todo", projectId = "local") => {
