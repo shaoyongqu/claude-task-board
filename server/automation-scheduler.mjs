@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
 
 import { signalProcessTree } from "../shared/process-tree.mjs";
 import {
@@ -14,6 +16,10 @@ import { getQuotaStatus } from "./quota.mjs";
 // local timer that spawns one headless `claude -p` controller turn per tick.
 // The controller claims and completes at most one todo per tick through
 // taskctl, attributed via CLAUDE_THREAD_ID.
+//
+// Scheduler state is persisted to <dataDirectory>/automation-configs.json so
+// enabled automations survive server restarts: entries are re-armed by
+// resume() when the server starts listening.
 export class LocalAutomationScheduler {
   constructor(options) {
     this.database = options.database;
@@ -22,12 +28,65 @@ export class LocalAutomationScheduler {
     this.processEnv = options.processEnv ?? process.env;
     this.killGraceMs = options.killGraceMs ?? 1_000;
     this.boardBaseUrl = options.boardBaseUrl ?? null;
+    this.persistPath = options.persistPath ?? null;
     this.entries = new Map();
     this.closed = false;
+    this.#loadPersisted();
   }
 
   setBoardBaseUrl(baseUrl) {
     this.boardBaseUrl = typeof baseUrl === "string" && baseUrl.trim() ? baseUrl.trim() : null;
+  }
+
+  #loadPersisted() {
+    if (!this.persistPath) return;
+    let persisted = null;
+    try {
+      persisted = JSON.parse(readFileSync(this.persistPath, "utf8"));
+    } catch {
+      return;
+    }
+    if (!Array.isArray(persisted)) return;
+    for (const record of persisted) {
+      if (!record || typeof record !== "object") continue;
+      if (!record.id || !record.request) continue;
+      const request = {
+        ...record.request,
+        skillPath: this.skillPath ?? record.request.skillPath,
+      };
+      this.entries.set(record.id, {
+        id: record.id,
+        name: buildTaskboardAutomationName(request),
+        request,
+        timer: null,
+        nextRunAt: null,
+        running: null,
+        lastError: null,
+      });
+    }
+  }
+
+  #persist() {
+    if (!this.persistPath) return;
+    try {
+      const payload = [...this.entries.values()].map((entry) => ({
+        id: entry.id,
+        request: entry.request,
+      }));
+      mkdirSync(path.dirname(this.persistPath), { recursive: true });
+      writeFileSync(this.persistPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    } catch {}
+  }
+
+  // Re-arm persisted enabled automations after the server starts listening.
+  resume() {
+    let offset = 0;
+    for (const entry of this.entries.values()) {
+      if (entry.request.enabledByUser && !entry.timer && !this.closed) {
+        this.#scheduleTick(entry, 1_000 + offset);
+        offset += 2_500;
+      }
+    }
   }
 
   #sanitizeItem(entry) {
@@ -82,6 +141,7 @@ export class LocalAutomationScheduler {
         ...request,
         skillPath: this.skillPath ?? request.skillPath,
       };
+      this.#persist();
       return existing;
     }
     const entry = {
@@ -128,6 +188,9 @@ export class LocalAutomationScheduler {
     if (!request.enabledByUser) return;
     if (!this.#hasTodo(request)) {
       entry.lastError = null;
+      // Stay armed: ticks are cheap when there is nothing to claim, and the
+      // next todo is picked up automatically on a later tick.
+      if (!this.closed) this.#scheduleTick(entry, request.intervalMinutes * 60_000);
       return;
     }
 
@@ -206,12 +269,14 @@ export class LocalAutomationScheduler {
         ...request,
         skillPath: this.skillPath ?? previous.request.skillPath,
       };
+      this.#persist();
       return { item: this.#sanitizeItem(previous), policy: this.#policy(previous) };
     }
 
     if (request.operation === "ensure-active") {
       const entry = this.#ensureEntry(request);
       this.#scheduleTick(entry, 250);
+      this.#persist();
       return { item: this.#sanitizeItem(entry), policy: this.#policy(entry) };
     }
 
@@ -226,11 +291,16 @@ export class LocalAutomationScheduler {
         quotaState: quota?.state ?? "available",
         currentStatus: entry.timer ? "ACTIVE" : "PAUSED",
       });
-      if (operation === "pause") {
+      if (operation === "pause" && request.enabledByUser && !hasTodo) {
+        // Keep the timer armed: a tick with no todos costs nothing, and the
+        // next todo is claimed automatically when it appears.
+        this.#scheduleTick(entry, 250);
+      } else if (operation === "pause") {
         this.#stopTimer(entry);
       } else if (operation === "ensure-active") {
         this.#scheduleTick(entry, 250);
       }
+      this.#persist();
       return {
         item: this.#sanitizeItem(entry),
         policy: this.#policy(entry),

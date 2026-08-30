@@ -1392,6 +1392,40 @@ export function App() {
         ?? (items.length === 1 ? items[0] : undefined);
       if (!item) {
         if (stored) {
+          // The scheduler lost this entry (e.g. the board service restarted).
+          // Re-apply the stored policy so an enabled automation self-heals
+          // instead of sitting paused while its switch still reads on.
+          if (stored.enabledByUser) {
+            const reapplied = await sendAutomationRequest(
+              "apply-policy",
+              options,
+              automationRequestContext,
+              stored.automationId,
+            );
+            const reappliedPolicy = isAutomationHostPolicy(reapplied.policy)
+              ? reapplied.policy
+              : null;
+            if (reappliedPolicy) {
+              const reappliedItem = (isAutomationHostItem(reapplied.item) ? reapplied.item : undefined)
+                ?? reapplied.items?.find((candidate) => candidate.id === reappliedPolicy.automationId)
+                ?? (reapplied.items?.length === 1 ? reapplied.items[0] : undefined);
+              writeProjectAutomation(projectId, {
+                automationId: reappliedItem?.id ?? reappliedPolicy.automationId,
+                codexProjectId: reappliedPolicy.codexProjectId,
+                codexProjectKind: reappliedPolicy.codexProjectKind,
+                codexHostId: reappliedPolicy.codexHostId,
+                workspacePath: reappliedPolicy.workspacePath,
+                status: reappliedItem?.status ?? "PAUSED",
+                enabledByUser: reappliedPolicy.enabledByUser,
+                quotaAware: reappliedPolicy.quotaAware,
+                ...(reapplied.quota ? { quota: reapplied.quota } : {}),
+                intervalMinutes: reappliedPolicy.intervalMinutes,
+                model: reappliedPolicy.model,
+                reasoningEffort: reappliedPolicy.reasoningEffort,
+              });
+              return;
+            }
+          }
           writeProjectAutomation(projectId, {
             ...stored,
             automationId: undefined,

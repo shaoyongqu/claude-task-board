@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
-import { access, chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, request as httpRequest } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -1865,5 +1865,78 @@ test("setup-status reports the skill and workspace root", async () => {
     );
   } finally {
     await Promise.resolve();
+  }
+});
+
+test("automation state survives a server restart", async () => {
+  const dataDirectory = await mkdtemp(path.join(os.tmpdir(), "automation-persist-"));
+  const workspacePath = path.join(dataDirectory, "workspace");
+  await mkdir(workspacePath, { recursive: true });
+  const fakeClaude = path.join(dataDirectory, "fake-claude.mjs");
+  await writeFile(fakeClaude, "process.exit(0);\n");
+  const hostRequest = {
+    requestId: "persist-1",
+    operation: "apply-policy",
+    taskboardProjectId: "local",
+    codexProjectId: workspacePath,
+    codexProjectKind: "local",
+    codexHostId: "local",
+    projectName: "临时任务",
+    workspacePath,
+    skillPath: path.join(dataDirectory, "skills", "manage-taskboard"),
+    enabledByUser: true,
+    quotaAware: false,
+    intervalMinutes: 5,
+    model: "default",
+    reasoningEffort: "medium",
+  };
+
+  const first = createTaskboardServer({
+    dataDirectory,
+    claudeExecutable: fakeClaude,
+    processEnv: { ...process.env, CLAUDE_TASKBOARD_MODELS: JSON.stringify([{ slug: "default", supportedReasoningEfforts: ["low", "medium", "high"] }]) },
+  });
+  const firstAddress = await first.listen({ port: 0 });
+  try {
+    // A todo so apply-policy keeps the automation armed.
+    const createResponse = await fetch(`http://127.0.0.1:${firstAddress.port}/api/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectId: "local", title: "Persist automation", status: "todo" }),
+    });
+    assert.equal(createResponse.status, 201);
+    const appliedResponse = await fetch(`http://127.0.0.1:${firstAddress.port}/api/local/automation`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(hostRequest),
+    });
+    const applied = { response: appliedResponse, body: await appliedResponse.json() };
+    assert.equal(applied.response.status, 200);
+    assert.equal(applied.body.item.status, "ACTIVE");
+    assert.ok(await stat(path.join(dataDirectory, "automation-configs.json")).then(() => true, () => false));
+  } finally {
+    await first.close();
+  }
+
+  const second = createTaskboardServer({
+    dataDirectory,
+    claudeExecutable: fakeClaude,
+    processEnv: { ...process.env, CLAUDE_TASKBOARD_MODELS: JSON.stringify([{ slug: "default", supportedReasoningEfforts: ["low", "medium", "high"] }]) },
+  });
+  const secondAddress = await second.listen({ port: 0 });
+  try {
+    const listedResponse = await fetch(`http://127.0.0.1:${secondAddress.port}/api/local/automation`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...hostRequest, operation: "list" }),
+    });
+    const listed = { response: listedResponse, body: await listedResponse.json() };
+    assert.equal(listed.response.status, 200);
+    assert.equal(listed.body.items.length, 1);
+    assert.equal(listed.body.items[0].status, "ACTIVE");
+    assert.equal(listed.body.items[0].rrule, "RRULE:FREQ=MINUTELY;INTERVAL=5");
+  } finally {
+    await second.close();
+    await rm(dataDirectory, { recursive: true, force: true });
   }
 });

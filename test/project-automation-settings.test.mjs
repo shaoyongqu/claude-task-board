@@ -201,7 +201,12 @@ test("opening settings and changing projects reconcile with the host list", () =
     reconcileSource,
     /sendAutomationRequest\(\s*"list",\s*options,\s*automationRequestContext,\s*stored\?\.automationId,\s*\)/,
   );
-  assert.doesNotMatch(reconcileSource, /"apply-policy"/);
+  // When the scheduler lost the entry (server restart) but the stored switch
+  // reads on, reconcile re-applies the policy so the automation self-heals.
+  assert.match(
+    reconcileSource,
+    /stored\.enabledByUser\) \{\s*const reapplied = await sendAutomationRequest\(\s*"apply-policy",\s*options,\s*automationRequestContext,\s*stored\.automationId,/,
+  );
   assert.match(
     drainSource,
     /sendAutomationRequest\(\s*"apply-policy",\s*queuedSave\.options,\s*queuedSave\.context,\s*previousRecord\?\.automationId,\s*\)/,

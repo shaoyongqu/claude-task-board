@@ -185,12 +185,12 @@ test("the local scheduler runs one claude controller turn for a todo", async () 
   }
 });
 
-test("the local scheduler pauses immediately when the project has no todos", async () => {
+test("the local scheduler stays armed without todos and spawns nothing", async () => {
   const fixture = await createSchedulerFixture();
   try {
     const applied = await fixture.scheduler.handleRequest(fixture.request);
-    assert.equal(applied.item.status, "PAUSED");
-    assert.equal(applied.item.nextRunAt, null);
+    assert.equal(applied.item.status, "ACTIVE");
+    assert.notEqual(applied.item.nextRunAt, null);
     await new Promise((resolve) => setTimeout(resolve, 400));
     await assert.rejects(
       () => waitForCapture(fixture.capturePath, 1),

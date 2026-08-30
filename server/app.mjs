@@ -1886,6 +1886,7 @@ export function createTaskboardServer(options = {}) {
     skillPath: resolved.skillPath,
     processEnv: rawSchedulerEnvironment,
     killGraceMs: 1_000,
+    persistPath: path.join(resolved.dataDirectory, "automation-configs.json"),
   });
   const sessionRegistry = new SessionRegistry();
   let boardBaseUrl = null;
@@ -3610,6 +3611,7 @@ export function createTaskboardServer(options = {}) {
         boardBaseUrl = listenUrl;
         aiChat.setBoardBaseUrl(listenUrl);
         automationScheduler.setBoardBaseUrl(listenUrl);
+        automationScheduler.resume();
         // Provision the Claude Code integration files for board-managed
         // workspaces that do not have them yet.
         void (async () => {
