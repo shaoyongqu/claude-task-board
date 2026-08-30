@@ -191,6 +191,36 @@
   margin-bottom: 4px;
 }
 
+.inline-media-composer.ProseMirror ul:has(> li.task-list-item),
+.inline-media-composer.ProseMirror ol:has(> li.task-list-item) {
+  padding-left: 2px;
+  list-style: none;
+}
+
+.inline-media-composer.ProseMirror li.task-list-item {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  column-gap: 7px;
+  list-style: none;
+}
+
+.inline-media-composer.ProseMirror li.task-list-item > input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  margin: 4px 0 0;
+  padding: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.inline-media-composer.ProseMirror .inline-media-task-content {
+  min-width: 0;
+}
+
+.inline-media-composer.ProseMirror .inline-media-task-content > p {
+  margin-bottom: 0;
+}
+
 .inline-media-composer.ProseMirror p:has(+ .inline-media-attachment-atom:not(.inline-media-video-atom)) {
   margin-bottom: 0;
 }

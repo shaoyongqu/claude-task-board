@@ -73,6 +73,7 @@ const INLINE_ATTACHMENT_TYPES = new Set([
   "text/plain",
 ]);
 const PROJECT_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
+const PROJECT_BOARD_DISPLAY_SETTINGS_KEY_PREFIX = "taskboard.project-board-display-settings.v3.";
 const TRUSTED_EMBED_ORIGINS = new Set(["app://-"]);
 const TRUSTED_ORIGINS_ENV = "CLAUDE_TASKBOARD_TRUSTED_ORIGINS";
 const CLAUDE_AGENT_ACTOR = {
@@ -1709,11 +1710,15 @@ export function createTaskboardServer(options = {}) {
     }
   }
 
-  async function updateClientStorage(body) {
+  function parseClientStorageUpdate(body) {
     assertPlainObject(body);
     assertAllowedKeys(body, new Set(["key", "value"]));
     const key = stringField(body.key, "key", { required: true, maxLength: 512 });
     const value = stringField(body.value, "value", { nullable: true, maxLength: 100_000 });
+    return { key, value };
+  }
+
+  async function updateClientStorage({ key, value }) {
     clientStorageWrite = clientStorageWrite.catch(() => {}).then(async () => {
       const entries = await readClientStorage();
       if (value === null) delete entries[key];
@@ -2091,10 +2096,41 @@ export function createTaskboardServer(options = {}) {
       if (pathname === "/api/client-storage") {
         if (request.method === "GET") {
           await clientStorageWrite;
-          return sendJson(response, 200, { entries: await readClientStorage() });
+          const entries = await readClientStorage();
+          const config = await cloudConfig.read();
+          if (config.remoteUrl) {
+            assertLoopbackRequest(request);
+            const shared = await readCloudJson("/api/client-storage");
+            for (const key of Object.keys(entries)) {
+              if (key.startsWith(PROJECT_BOARD_DISPLAY_SETTINGS_KEY_PREFIX)) delete entries[key];
+            }
+            for (const [key, value] of Object.entries(shared.entries)) {
+              if (key.startsWith(PROJECT_BOARD_DISPLAY_SETTINGS_KEY_PREFIX)) entries[key] = value;
+            }
+          }
+          return sendJson(response, 200, { entries });
         }
         if (request.method === "PATCH") {
-          await updateClientStorage(await readJson(request));
+          const update = parseClientStorageUpdate(await readJson(request));
+          const config = await cloudConfig.read();
+          if (
+            config.remoteUrl
+            && update.key.startsWith(PROJECT_BOARD_DISPLAY_SETTINGS_KEY_PREFIX)
+          ) {
+            assertLoopbackRequest(request);
+            return sendFetchResponse(
+              response,
+              await cloudProxy.forward(new Request("http://127.0.0.1/api/client-storage", {
+                method: "PATCH",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify(update),
+              })),
+            );
+          }
+          await updateClientStorage(update);
+          if (update.key.startsWith(PROJECT_BOARD_DISPLAY_SETTINGS_KEY_PREFIX)) {
+            events.emit("client-storage.updated", { key: update.key });
+          }
           return sendEmpty(response, 204);
         }
         return methodNotAllowed(response, ["GET", "PATCH"]);

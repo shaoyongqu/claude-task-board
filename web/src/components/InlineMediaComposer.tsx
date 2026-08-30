@@ -1138,6 +1138,15 @@ function ComposerReferenceChip({
 const INLINE_MEDIA_NODE = "taskboard_inline_media";
 const INLINE_REFERENCE_NODE = "taskboard_inline_reference";
 const INLINE_MEDIA_PLACEHOLDER_PREFIX = "https://taskboard.invalid/inline-media/";
+const TASK_LIST_MARKER = /^\[([ xX])\][\t ]+/;
+
+function taskMarkerIsChecked(marker: string): boolean {
+  return /^\[[xX]\]/.test(marker);
+}
+
+function toggledTaskMarker(marker: string): string {
+  return marker.replace(/^\[[ xX]\]/, taskMarkerIsChecked(marker) ? "[ ]" : "[x]");
+}
 
 const markdownMarks = defaultMarkdownParser.schema.spec.marks.append({
   strike: {
@@ -1161,7 +1170,33 @@ const composerMarks = ["strong", "em", "code", "link", "strike"].reduce(
 );
 
 const markdownNodes = defaultMarkdownParser.schema.spec.nodes;
-const composerNodes = markdownNodes.update("heading", {
+const listItemNode = markdownNodes.get("list_item")!;
+const composerNodes = markdownNodes.update("list_item", {
+  ...listItemNode,
+  attrs: {
+    ...(listItemNode.attrs ?? {}),
+    taskMarker: { default: null },
+  },
+  toDOM(node) {
+    const taskMarker = typeof node.attrs.taskMarker === "string"
+      ? node.attrs.taskMarker
+      : null;
+    if (!taskMarker) return ["li", 0];
+    const checkboxAttributes: Record<string, string> = {
+      type: "checkbox",
+      contenteditable: "false",
+      tabindex: "-1",
+      "data-inline-media-task-checkbox": "true",
+    };
+    if (taskMarkerIsChecked(taskMarker)) checkboxAttributes.checked = "checked";
+    return [
+      "li",
+      { class: "task-list-item" },
+      ["input", checkboxAttributes],
+      ["div", { class: "inline-media-task-content" }, 0],
+    ];
+  },
+}).update("heading", {
   ...markdownNodes.get("heading")!,
   content: "inline*",
 }).append({
@@ -1374,8 +1409,21 @@ function editorNodesWithAtoms(
 
   const children: ProseMirrorNode[] = [];
   node.forEach((child) => children.push(...editorNodesWithAtoms(child, atomSegments)));
-  if (node.type.name === "list_item" && children[0]?.type.name !== "paragraph") {
-    children.unshift(composerSchema.nodes.paragraph.create());
+  if (node.type.name === "list_item") {
+    if (children[0]?.type.name !== "paragraph") {
+      children.unshift(composerSchema.nodes.paragraph.create());
+    }
+    if (typeof node.attrs.taskMarker !== "string") {
+      const taskMarker = TASK_LIST_MARKER.exec(children[0].textContent)?.[0];
+      if (taskMarker) {
+        children[0] = children[0].cut(taskMarker.length);
+        return [node.type.create(
+          { ...node.attrs, taskMarker },
+          Fragment.fromArray(children),
+          node.marks,
+        )];
+      }
+    }
   }
   return [node.copy(Fragment.fromArray(children))];
 }
@@ -1478,6 +1526,25 @@ function markInputRule(
   });
 }
 
+function taskListInputRule(): InputRule {
+  return new InputRule(/^\[([ xX])\][\t ]$/, (state, match, start, end) => {
+    const { $from } = state.selection;
+    if ($from.parent.type !== composerSchema.nodes.paragraph || $from.depth < 2) return null;
+    const listItemDepth = $from.depth - 1;
+    const listItem = $from.node(listItemDepth);
+    if (
+      listItem.type !== composerSchema.nodes.list_item
+      || start !== $from.start()
+    ) return null;
+    return state.tr
+      .delete(start, end)
+      .setNodeMarkup($from.before(listItemDepth), undefined, {
+        ...listItem.attrs,
+        taskMarker: match[0],
+      });
+  });
+}
+
 function composerPlugins(): Plugin[] {
   const rules: InputRule[] = [
     wrappingInputRule(/^\s*>\s$/, composerSchema.nodes.blockquote),
@@ -1488,6 +1555,7 @@ function composerPlugins(): Plugin[] {
       (match, node) => node.childCount + node.attrs.order === Number(match[1]),
     ),
     wrappingInputRule(/^\s*([-+*])\s$/, composerSchema.nodes.bullet_list),
+    taskListInputRule(),
     textblockTypeInputRule(/^```$/, composerSchema.nodes.code_block),
     textblockTypeInputRule(/^(#{1,6})\s$/, composerSchema.nodes.heading, (match) => ({
       level: match[1].length,
@@ -1535,12 +1603,17 @@ const editorMarkdownSerializer = new MarkdownSerializer({
     state.write("\n");
   },
   paragraph(state, node, parent, index) {
-    const taskMarker = parent.type === composerSchema.nodes.list_item && index === 0
-      ? /^\[([ xX])\][\t ]+/.exec(node.textContent)?.[0]
+    const storedTaskMarker = parent.type === composerSchema.nodes.list_item && index === 0
+      && typeof parent.attrs.taskMarker === "string"
+      ? parent.attrs.taskMarker
       : null;
+    const textTaskMarker = parent.type === composerSchema.nodes.list_item && index === 0
+      ? TASK_LIST_MARKER.exec(node.textContent)?.[0]
+      : null;
+    const taskMarker = storedTaskMarker ?? textTaskMarker;
     if (taskMarker) {
       state.write(taskMarker);
-      state.renderInline(node.cut(taskMarker.length), false);
+      state.renderInline(storedTaskMarker ? node : node.cut(taskMarker.length), false);
     } else {
       state.renderInline(node);
     }
@@ -2315,6 +2388,37 @@ export const InlineMediaComposer = forwardRef<InlineMediaComposerHandle, InlineM
           return true;
         },
         handleDOMEvents: {
+          mousedown(_view, event) {
+            const target = event.target;
+            if (
+              !(target instanceof Element)
+              || !target.closest("[data-inline-media-task-checkbox]")
+            ) return false;
+            event.preventDefault();
+            return true;
+          },
+          click(view, event) {
+            const target = event.target;
+            if (!(target instanceof Element)) return false;
+            const checkbox = target.closest("[data-inline-media-task-checkbox]");
+            if (!checkbox) return false;
+            event.preventDefault();
+            if (disabledRef.current) return true;
+            const listItem = checkbox.closest("li.task-list-item");
+            if (!listItem) return false;
+            const nodePos = view.posAtDOM(listItem, 0) - 1;
+            const node = view.state.doc.nodeAt(nodePos);
+            if (
+              node?.type !== composerSchema.nodes.list_item
+              || typeof node.attrs.taskMarker !== "string"
+            ) return false;
+            view.dispatch(view.state.tr.setNodeMarkup(nodePos, undefined, {
+              ...node.attrs,
+              taskMarker: toggledTaskMarker(node.attrs.taskMarker),
+            }));
+            view.focus();
+            return true;
+          },
           dragover(_view, event) {
             if (disabledRef.current || !event.dataTransfer?.types.includes("Files")) return false;
             event.preventDefault();

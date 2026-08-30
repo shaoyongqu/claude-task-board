@@ -310,7 +310,9 @@ export function BoardCardDisplayMenu({
                         : <StatusIcon status={status as TaskStatus} color="var(--display-status-color)" size={15} />}
                       <span>{status === "archived"
                         ? text("已归档", "Archived")
-                        : taskStatusLabel(language, status)}</span>
+                        : status === "blocked"
+                          ? text("遇到阻碍（默认隐藏）", "Blocked (hidden by default)")
+                          : taskStatusLabel(language, status)}</span>
                     </div>
                   );
                 })}
