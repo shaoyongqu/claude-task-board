@@ -34,6 +34,7 @@ import {
   setupProjectIntegration,
 } from "./claude-integration.mjs";
 import { AiChatService } from "./ai-chat.mjs";
+import { buildClaudeSessionTranscript } from "./claude-session-transcript.mjs";
 import {
   configuredModels,
   defaultProjectWorkspacePath,
@@ -2340,6 +2341,46 @@ export function createTaskboardServer(options = {}) {
           [threadId, await readClaudeSessionState(threadId)]
         )));
         return sendJson(response, 200, { progress: Object.fromEntries(entries) });
+      }
+
+      if (pathname === "/api/local/claude-session-transcript") {
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        if ([...url.searchParams.keys()].some((key) => key !== "threadId")) {
+          throw new ApiError(400, "UNKNOWN_QUERY_PARAMETER", "Only 'threadId' is supported");
+        }
+        const threadId = (url.searchParams.get("threadId") ?? "").trim();
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(threadId)) {
+          throw new ApiError(400, "INVALID_FIELD", "'threadId' must be a Claude Code session ID");
+        }
+        const sessionPath = await findClaudeSession(threadId);
+        if (!sessionPath) {
+          throw new ApiError(404, "SESSION_NOT_FOUND", `No Claude Code session '${threadId}' exists on this machine`);
+        }
+        const [content, state] = await Promise.all([
+          readFile(sessionPath, "utf8"),
+          readClaudeSessionState(threadId),
+        ]);
+        const lines = content.split("\n");
+        const events = buildClaudeSessionTranscript(threadId, lines);
+        let workspacePath = null;
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const record = JSON.parse(line);
+            if (typeof record?.cwd === "string" && record.cwd.trim()) {
+              workspacePath = record.cwd.trim();
+              break;
+            }
+          } catch {}
+        }
+        return sendJson(response, 200, {
+          threadId,
+          events,
+          workspacePath,
+          running: state.running,
+          completed: state.completed,
+          total: state.total,
+        });
       }
 
       if (pathname === "/api/local/cloud-session") {

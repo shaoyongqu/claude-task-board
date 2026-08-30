@@ -65,6 +65,7 @@ import {
   assigneeTargetForActor,
 } from "./actors";
 import { BoardColumn } from "./components/BoardColumn";
+import { ClaudeSessionViewer } from "./components/ClaudeSessionViewer";
 import { randomUUID } from "./uuid";
 import type { AiChatOpenThreadRequest } from "./components/AiChat";
 import {
@@ -809,6 +810,11 @@ export function App() {
   const [aiImportReadyProjectId, setAiImportReadyProjectId] = useState<string | null>(null);
   const [aiThreads, setAiThreads] = useState<AiChatThread[]>([]);
   const [aiOpenThreadRequest, setAiOpenThreadRequest] = useState<AiChatOpenThreadRequest | null>(null);
+  const [claudeViewerSession, setClaudeViewerSession] = useState<{
+    threadId: string;
+    title: string | null;
+    projectId: string | null;
+  } | null>(null);
   const [readActivityKeys, setReadActivityKeys] = useState<Record<string, string>>({});
   const [claudeSessionProgress, setClaudeSessionProgress] = useState<
     Record<string, {
@@ -2978,7 +2984,18 @@ export function App() {
     };
   }
 
-  function openThread(binding: CodexThreadBinding) {
+  function openClaudeViewer(threadId: string, title: string | null, projectId: string | null) {
+    if (!localAiChatAvailable) {
+      setActionError(text(
+        "会话记录仅在本机可用。请在运行看板服务的机器上用 http://127.0.0.1:47823 打开后操作。",
+        "Session transcripts are only available locally. Open http://127.0.0.1:47823 on the machine running the board service.",
+      ));
+      return;
+    }
+    setClaudeViewerSession({ threadId, title, projectId });
+  }
+
+  function openThread(binding: CodexThreadBinding, title: string | null = null) {
     if (binding.codexProjectKind === "remote") {
       setActionError(text(
         "该 SSH 远程对话需要在其原始环境中打开。",
@@ -2986,18 +3003,19 @@ export function App() {
       ));
       return;
     }
-    void continueInTerminal({
-      sessionId: binding.threadId.trim(),
-      projectId: binding.workspacePath
+    openClaudeViewer(
+      binding.threadId.trim(),
+      title,
+      binding.workspacePath
         ? projects.find((candidate) => (
           (deviceWorkspacePaths[candidate.id] ?? candidate.workspacePath) === binding.workspacePath
         ))?.id ?? null
         : null,
-    });
+    );
   }
 
-  function openLegacyLocalThread(threadId: string) {
-    void continueInTerminal({ sessionId: threadId.trim() });
+  function openLegacyLocalThread(threadId: string, title: string | null = null) {
+    openClaudeViewer(threadId.trim(), title, null);
   }
 
   function openTaskConversation(conversation: TaskConversationItem) {
@@ -4566,6 +4584,22 @@ export function App() {
             openThreadRequest={aiOpenThreadRequest}
           />
         </Suspense>
+      )}
+
+      {claudeViewerSession && (
+        <ClaudeSessionViewer
+          threadId={claudeViewerSession.threadId}
+          title={claudeViewerSession.title}
+          onClose={() => setClaudeViewerSession(null)}
+          onContinueInTerminal={(threadId) => void continueInTerminal({
+            sessionId: threadId,
+            projectId: claudeViewerSession.projectId,
+          })}
+          onCopyCommand={(threadId) => void copyText(
+            `claude --resume ${threadId}`,
+            text("Claude Code 恢复命令已复制。", "Claude Code resume command copied."),
+          )}
+        />
       )}
 
       <div className="sr-only" role="status" aria-live="polite">{announcement}</div>

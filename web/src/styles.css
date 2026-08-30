@@ -12082,3 +12082,139 @@ kbd {
   gap: 8px;
   justify-content: flex-end;
 }
+
+.claude-session-backdrop {
+  position: fixed;
+  z-index: 1500;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(13, 14, 16, 0.32);
+  backdrop-filter: blur(1.5px);
+}
+
+.claude-session-viewer {
+  display: flex;
+  flex-direction: column;
+  width: min(860px, 100%);
+  height: min(84vh, 920px);
+  border: var(--border-hairline) solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--surface-raised);
+  box-shadow: var(--dialog-shadow);
+  overflow: hidden;
+}
+
+.claude-session-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px 10px 16px;
+  border-bottom: var(--border-hairline) solid var(--border);
+}
+
+.claude-session-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-primary);
+}
+
+.claude-session-title strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 590;
+}
+
+.claude-session-status {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 520;
+}
+
+.claude-session-status.is-running {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.claude-session-header-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.claude-session-close {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.claude-session-close:hover {
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+  color: var(--text-primary);
+}
+
+.claude-session-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 16px;
+  border-bottom: var(--border-hairline) solid var(--border);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.claude-session-meta code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.claude-session-meta span {
+  flex-shrink: 0;
+}
+
+.claude-session-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+  padding: 22px 26px 18px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.claude-session-error {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, #e5484d 10%, transparent);
+  color: #e5484d;
+  font-size: 12px;
+}
+
+.claude-session-hint {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: center;
+}

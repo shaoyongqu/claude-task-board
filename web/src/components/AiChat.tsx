@@ -1204,7 +1204,7 @@ function EventAttachments({ event }: { event: AiChatEvent }) {
   );
 }
 
-function MessageTimeline({
+export function MessageTimeline({
   activeRunId,
   events,
   skills,

@@ -2,6 +2,7 @@ import type {
   ActorIdentity,
   AiChatCatalog,
   AiChatAttachmentInput,
+  AiChatEvent,
   AiChatRun,
   AiChatSandbox,
   AiChatThread,
@@ -226,6 +227,23 @@ export async function getClaudeSessionProgress(
     } | null>;
   }>(`/api/local/claude-session-progress?${query}`, { signal });
   return data.progress;
+}
+
+export interface ClaudeSessionTranscript {
+  threadId: string;
+  events: AiChatEvent[];
+  workspacePath: string | null;
+  running: boolean;
+  completed: number | null;
+  total: number | null;
+}
+
+export async function getClaudeSessionTranscript(
+  threadId: string,
+  signal?: AbortSignal,
+): Promise<ClaudeSessionTranscript> {
+  const query = new URLSearchParams({ threadId });
+  return request<ClaudeSessionTranscript>(`/api/local/claude-session-transcript?${query}`, { signal });
 }
 
 export async function postAutomationRequest(
