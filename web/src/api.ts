@@ -231,9 +231,12 @@ export async function getClaudeSessionProgress(
 export async function postAutomationRequest(
   payload: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
+  // Automation status requests gate every later reconcile call; a request
+  // hanging on a half-dead connection must fail fast so the UI can retry.
   return request("/api/local/automation", {
     method: "POST",
     body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(30_000),
   });
 }
 

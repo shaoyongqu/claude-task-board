@@ -973,6 +973,7 @@ export function App() {
   const automationModels = automationCatalog && automationCatalog.projectId === selectedProject?.id
     ? automationCatalog.models
     : [];
+  const [automationCatalogAttempt, setAutomationCatalogAttempt] = useState(0);
   useEffect(() => {
     setAutomationCatalog(null);
     setAutomationCatalogError(null);
@@ -982,6 +983,11 @@ export function App() {
     }
     const controller = new AbortController();
     setAutomationCatalogLoading(true);
+    // Without the catalog, automation reconciliation never runs, so a single
+    // transient failure (e.g. the board service restarting while the page
+    // loads) must not leave the automation button stuck on stale local state.
+    // Retry with capped backoff until the catalog loads.
+    let retryTimer = 0;
     void getAiChatCatalog(selectedProject.id, controller.signal).then(
       (catalog) => {
         if (controller.signal.aborted) return;
@@ -994,10 +1000,16 @@ export function App() {
           ? error.message
           : text("无法读取 Claude Code 模型目录", "Could not load the Claude Code model catalog."));
         setAutomationCatalogLoading(false);
+        retryTimer = window.setTimeout(() => {
+          setAutomationCatalogAttempt((current) => current + 1);
+        }, Math.min(2_000 * 2 ** Math.min(automationCatalogAttempt, 5), 60_000));
       },
     );
-    return () => controller.abort();
-  }, [localAiChatAvailable, selectedProject?.id, text]);
+    return () => {
+      controller.abort();
+      window.clearTimeout(retryTimer);
+    };
+  }, [automationCatalogAttempt, localAiChatAvailable, selectedProject?.id, text]);
   const aiImportProjectId = hasLoadedTasks
     && tasks.length === 0
     && selectedProject
@@ -1326,16 +1338,16 @@ export function App() {
     }
   }, [sendAutomationRequest, writeProjectAutomation]);
 
-  const reconcileProjectAutomation = useCallback(async () => {
+  const reconcileProjectAutomation = useCallback(async (): Promise<boolean> => {
     if (!automationRequestContext) {
       setAutomationError(null);
-      return;
+      return true;
     }
     const models = automationCatalog?.projectId === automationRequestContext.taskboardProjectId
       ? automationCatalog.models
       : null;
-    if (!models) return;
-    if (automationRequestInFlightRef.current) return;
+    if (!models) return true;
+    if (automationRequestInFlightRef.current) return true;
     const projectId = automationRequestContext.taskboardProjectId;
     const stored = projectAutomationsRef.current[projectId];
     const initialLoad = !loadedAutomationProjectIdsRef.current.has(projectId);
@@ -1346,7 +1358,7 @@ export function App() {
       const defaultModel = models[0];
       let options: ProjectAutomationOptions | undefined = stored;
       if (!options) {
-        if (!defaultModel) return;
+        if (!defaultModel) return true;
         options = {
           enabledByUser: false,
           quotaAware: false,
@@ -1367,7 +1379,7 @@ export function App() {
       const policy = isAutomationHostPolicy(response.policy) ? response.policy : null;
       const effectiveProjectIdentity = policy ?? automationRequestContext;
       if (!stored) {
-        if (!policy) return;
+        if (!policy) return true;
         const item = (isAutomationHostItem(response.item) ? response.item : undefined)
           ?? items.find((candidate) => candidate.id === policy.automationId)
           ?? (items.length === 1 ? items[0] : undefined);
@@ -1385,7 +1397,7 @@ export function App() {
           model: policy.model,
           reasoningEffort: policy.reasoningEffort,
         });
-        return;
+        return true;
       }
       const item = (isAutomationHostItem(response.item) ? response.item : undefined)
         ?? items.find((item) => item.id === stored?.automationId)
@@ -1423,7 +1435,7 @@ export function App() {
                 model: reappliedPolicy.model,
                 reasoningEffort: reappliedPolicy.reasoningEffort,
               });
-              return;
+              return true;
             }
           }
           writeProjectAutomation(projectId, {
@@ -1442,10 +1454,10 @@ export function App() {
             reasoningEffort: policy?.reasoningEffort ?? stored.reasoningEffort,
           });
         }
-        return;
+        return true;
       }
       const intervalMinutes = policy?.intervalMinutes ?? intervalMinutesFromRrule(item.rrule);
-      if (!intervalMinutes) return;
+      if (!intervalMinutes) return true;
       writeProjectAutomation(projectId, {
         automationId: item.id,
         codexProjectId: effectiveProjectIdentity.codexProjectId,
@@ -1466,10 +1478,12 @@ export function App() {
         model: policy?.model ?? item.model,
         reasoningEffort: policy?.reasoningEffort ?? item.reasoningEffort,
       });
+      return true;
     } catch (error) {
       setAutomationError(error instanceof Error
         ? error.message
         : text("无法读取自动化状态", "Could not read the automation status."));
+      return false;
     } finally {
       loadedAutomationProjectIdsRef.current.add(projectId);
       automationRequestInFlightRef.current = null;
@@ -1680,10 +1694,33 @@ export function App() {
     };
   }, [projectContextMenu]);
 
+  const [automationReconcileAttempt, setAutomationReconcileAttempt] = useState(0);
   useEffect(() => {
     setAutomationError(null);
-    void reconcileProjectAutomation();
-  }, [selectedProjectId, reconcileProjectAutomation]);
+    let retryTimer = 0;
+    void reconcileProjectAutomation().then((reconciled) => {
+      if (reconciled) return;
+      // A failed status read (e.g. the board service restarting while the page
+      // loads) would otherwise pin the button to the stale local snapshot
+      // until a manual page refresh. Retry with capped backoff.
+      retryTimer = window.setTimeout(() => {
+        setAutomationReconcileAttempt((current) => current + 1);
+      }, Math.min(2_000 * 2 ** Math.min(automationReconcileAttempt, 5), 60_000));
+    });
+    return () => window.clearTimeout(retryTimer);
+  }, [automationReconcileAttempt, reconcileProjectAutomation, selectedProjectId]);
+
+  // The scheduler keeps changing state while the page is closed (restarts,
+  // quota pauses), so poll the server so the automation status shown on the
+  // button converges to reality without a manual refresh.
+  const hasSelectedProjectAutomation = Boolean(projectAutomations[selectedProjectId]);
+  useEffect(() => {
+    if (!hasSelectedProjectAutomation) return;
+    const timer = window.setInterval(() => {
+      void reconcileProjectAutomation();
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [hasSelectedProjectAutomation, reconcileProjectAutomation]);
 
   useEffect(() => {
     if (!localAiChatAvailable) return;

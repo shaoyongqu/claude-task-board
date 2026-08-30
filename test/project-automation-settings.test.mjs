@@ -154,9 +154,35 @@ test("unavailable automation state has one notice, clears stale errors, and cann
   );
   assert.match(
     reconcileSource,
-    /if \(!automationRequestContext\) \{\s*setAutomationError\(null\);\s*return;/,
+    /if \(!automationRequestContext\) \{\s*setAutomationError\(null\);\s*return true;/,
   );
   assert.doesNotMatch(reconcileSource, /setAutomationError\(automationProjectContext\.unavailableReason/);
+});
+
+test("automation status converges via retry and periodic reconciliation", async () => {
+  const apiSource = await readFile(new URL("../web/src/api.ts", import.meta.url), "utf8");
+  // A transient failure at page load (e.g. the board service restarting) must
+  // not pin the automation button to the stale local snapshot forever.
+  assert.match(appSource, /const \[automationCatalogAttempt, setAutomationCatalogAttempt\] = useState\(0\)/);
+  assert.match(
+    appSource,
+    /setAutomationCatalogAttempt\(\(current\) => current \+ 1\);\s*\}, Math\.min\(2_000 \* 2 \*\* Math\.min\(automationCatalogAttempt, 5\), 60_000\)\)/,
+  );
+  assert.match(appSource, /const \[automationReconcileAttempt, setAutomationReconcileAttempt\] = useState\(0\)/);
+  assert.match(
+    appSource,
+    /setAutomationReconcileAttempt\(\(current\) => current \+ 1\);\s*\}, Math\.min\(2_000 \* 2 \*\* Math\.min\(automationReconcileAttempt, 5\), 60_000\)\)/,
+  );
+  // The scheduler keeps running while the page is closed; poll so the button
+  // reflects reality without a manual refresh.
+  assert.match(
+    appSource,
+    /const timer = window\.setInterval\(\(\) => \{\s*void reconcileProjectAutomation\(\);\s*\}, 60_000\)/,
+  );
+  assert.match(appSource, /const hasSelectedProjectAutomation = Boolean\(projectAutomations\[selectedProjectId\]\)/);
+  // Automation requests gate every later reconcile: fail fast instead of
+  // hanging on a half-dead connection.
+  assert.match(apiSource, /signal: AbortSignal\.timeout\(30_000\)/);
 });
 
 test("automation changes submit immediately with model-specific effort normalization", () => {
