@@ -2001,6 +2001,11 @@ export function createTaskboardServer(options = {}) {
   const claudeSessionSearches = new Map();
   const claudeSessionStateCache = new Map();
 
+  function withRegisteredRunning(state, registeredSession) {
+    if (!registeredSession) return state;
+    return { ...state, running: !registeredSession.endedAt };
+  }
+
   async function findClaudeSession(threadId) {
     const cached = claudeSessionSearches.get(threadId);
     if (cached && (cached.path || Date.now() - cached.checkedAt < 5_000)) return cached.path;
@@ -2011,13 +2016,20 @@ export function createTaskboardServer(options = {}) {
   }
 
   async function readClaudeSessionState(threadId) {
+    // The hooks-reported lifecycle is authoritative for "running": SessionStart
+    // marks the session alive until SessionEnd, so the flag stays stable while
+    // the transcript's newest record alternates between assistant output and
+    // user tool results. The tail heuristic below only covers sessions the
+    // registry never saw (board restarted mid-session, workspace without
+    // board hooks).
+    const registeredSession = sessionRegistry.get(threadId);
     const sessionPath = await findClaudeSession(threadId);
     if (!sessionPath) return null;
 
     const sessionStat = await stat(sessionPath);
     const cached = claudeSessionStateCache.get(sessionPath);
     if (cached?.size === sessionStat.size && cached.mtimeMs === sessionStat.mtimeMs) {
-      return cached.state;
+      return withRegisteredRunning(cached.state, registeredSession);
     }
 
     const length = Math.min(sessionStat.size, CLAUDE_SESSION_TAIL_BYTES);
@@ -2038,9 +2050,9 @@ export function createTaskboardServer(options = {}) {
       } catch {}
     }
 
-    // Claude Code persists one JSON record per stream event; a session is
-    // considered running when its newest record is an assistant message
-    // written within the last two minutes.
+    // Claude Code persists one JSON record per stream event; a session not
+    // known to the hooks registry is considered running when its newest record
+    // is an assistant message written within the last two minutes.
     let lastRecord = null;
     for (let index = records.length - 1; index >= 0; index -= 1) {
       if (records[index]?.type) {
@@ -2049,7 +2061,7 @@ export function createTaskboardServer(options = {}) {
       }
     }
     let running = false;
-    if (lastRecord?.type === "assistant" && typeof lastRecord.timestamp === "string") {
+    if (!registeredSession && lastRecord?.type === "assistant" && typeof lastRecord.timestamp === "string") {
       const lastTimestamp = Date.parse(lastRecord.timestamp);
       running = Number.isFinite(lastTimestamp)
         && Date.now() - lastTimestamp < 2 * 60 * 1_000
@@ -2076,11 +2088,11 @@ export function createTaskboardServer(options = {}) {
       }
     }
 
-    const state = {
+    const state = withRegisteredRunning({
       completed: progress?.completed ?? null,
       total: progress?.total ?? null,
       running,
-    };
+    }, registeredSession);
     claudeSessionStateCache.set(sessionPath, {
       size: sessionStat.size,
       mtimeMs: sessionStat.mtimeMs,
@@ -2467,7 +2479,10 @@ export function createTaskboardServer(options = {}) {
         if (!parsed) {
           throw new ApiError(400, "INVALID_AUTOMATION_REQUEST", "Automation request is invalid");
         }
-        const result = await automationScheduler.handleRequest(parsed);
+        const result = await automationScheduler.handleRequest(
+          parsed,
+          { actor: actorFromRequest(request) },
+        );
         if (result?.error === "not-found") {
           throw new ApiError(404, "AUTOMATION_NOT_FOUND", "No automation exists for this project");
         }

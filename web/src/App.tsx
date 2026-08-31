@@ -922,6 +922,7 @@ export function App() {
   const [workspaceDraft, setWorkspaceDraft] = useState("");
   const [savingWorkspace, setSavingWorkspace] = useState(false);
   const [workspaceBrowserOpen, setWorkspaceBrowserOpen] = useState(false);
+  const [workspacePicking, setWorkspacePicking] = useState(false);
   const [integrationDialogOpen, setIntegrationDialogOpen] = useState(false);
   const [integrationStatus, setIntegrationStatus] = useState<ProjectIntegrationStatus | null>(null);
   const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null);
@@ -983,6 +984,9 @@ export function App() {
   const loadedAutomationProjectIdsRef = useRef(new Set<string>());
   const queuedAutomationSavesRef = useRef(new Map<string, QueuedProjectAutomationSave>());
   const projectAutomationsRef = useRef(projectAutomations);
+  // Task ids whose board-triggered execution was just requested; they stay
+  // locked until the session progress poll takes over (or the request fails).
+  const [pendingExecutionIds, setPendingExecutionIds] = useState<ReadonlySet<string>>(() => new Set());
 
   useEffect(() => {
     document.documentElement.lang = locale;
@@ -1326,14 +1330,16 @@ export function App() {
   }, []);
 
   const sendAutomationRequest = useCallback(async (
-    operation: "ensure-active" | "pause" | "list" | "apply-policy",
+    operation: "ensure-active" | "pause" | "list" | "apply-policy" | "run-task" | "terminate-task",
     options: ProjectAutomationOptions,
     context: AutomationRequestContext,
     automationId?: string,
+    issueId?: string,
   ): Promise<AutomationHostResponse> => {
     const response = await postAutomationRequest({
       requestId: randomUUID(),
       operation,
+      ...(issueId ? { issueId } : {}),
       taskboardProjectId: context.taskboardProjectId,
       codexProjectId: context.codexProjectId,
       codexProjectKind: context.codexProjectKind,
@@ -1408,6 +1414,117 @@ export function App() {
       }
     }
   }, [sendAutomationRequest, writeProjectAutomation]);
+
+  // Options used for board-triggered executions: the stored automation
+  // settings when the project has any, otherwise catalog defaults.
+  const automationExecutionOptions = useCallback((projectId: string): ProjectAutomationOptions | null => {
+    const stored = projectAutomationsRef.current[projectId];
+    if (stored) return stored;
+    const models = automationCatalog?.projectId === projectId ? automationCatalog.models : null;
+    const defaultModel = models?.[0];
+    if (!defaultModel) return null;
+    return {
+      enabledByUser: true,
+      quotaAware: false,
+      intervalMinutes: 5,
+      model: defaultModel.slug,
+      modelProfileId: null,
+      reasoningEffort: defaultModel.defaultReasoningEffort,
+    };
+  }, [automationCatalog]);
+
+  const releasePendingExecution = useCallback((taskId: string) => {
+    setPendingExecutionIds((current) => {
+      if (!current.has(taskId)) return current;
+      const next = new Set(current);
+      next.delete(taskId);
+      return next;
+    });
+  }, []);
+
+  const triggerTaskExecution = useCallback(async (task: Task) => {
+    const context = automationRequestContext;
+    if (!context || context.taskboardProjectId !== task.projectId) return;
+    const options = automationExecutionOptions(task.projectId);
+    if (!options) {
+      setActionError(textRef.current(
+        "已移入处理中，但缺少可用的模型配置，未能启动自动执行。",
+        "Moved to in progress, but no model is configured, so automatic execution did not start.",
+      ));
+      return;
+    }
+    setPendingExecutionIds((current) => new Set(current).add(task.id));
+    window.setTimeout(() => releasePendingExecution(task.id), 120_000);
+    try {
+      const response = await sendAutomationRequest(
+        "run-task",
+        options,
+        context,
+        projectAutomationsRef.current[task.projectId]?.automationId,
+        task.identifier,
+      );
+      const updated = (response as { task?: unknown }).task;
+      if (
+        updated && typeof updated === "object"
+        && typeof (updated as { id?: unknown }).id === "string"
+        && typeof (updated as { version?: unknown }).version === "number"
+      ) {
+        const saved = updated as Task;
+        setTasks((current) => sortTasks(current.map((candidate) => (
+          candidate.id === saved.id ? saved : candidate
+        ))));
+      }
+      setAnnouncement(textRef.current(
+        `已开始自动执行 ${task.identifier}。`,
+        `Automatic execution started for ${task.identifier}.`,
+      ));
+    } catch (error) {
+      releasePendingExecution(task.id);
+      setActionError(errorMessage(error));
+    }
+  }, [
+    automationExecutionOptions,
+    automationRequestContext,
+    releasePendingExecution,
+    sendAutomationRequest,
+    setAnnouncement,
+  ]);
+
+  const terminateTaskExecution = useCallback(async (task: Task) => {
+    const context = automationRequestContext;
+    if (!context || context.taskboardProjectId !== task.projectId) return;
+    const options = automationExecutionOptions(task.projectId);
+    if (!options) return;
+    try {
+      await sendAutomationRequest(
+        "terminate-task",
+        options,
+        context,
+        projectAutomationsRef.current[task.projectId]?.automationId,
+        task.identifier,
+      );
+      releasePendingExecution(task.id);
+      setAnnouncement(textRef.current(
+        `已终止 ${task.identifier} 的执行。`,
+        `Execution of ${task.identifier} was terminated.`,
+      ));
+    } catch (error) {
+      setActionError(errorMessage(error));
+    }
+  }, [automationExecutionOptions, automationRequestContext, releasePendingExecution, sendAutomationRequest, setAnnouncement]);
+
+  // Once the session progress poll knows the bound session, the real running
+  // signal owns the lock and the pending placeholder is no longer needed.
+  useEffect(() => {
+    if (pendingExecutionIds.size === 0) return;
+    for (const taskId of pendingExecutionIds) {
+      const task = tasksRef.current.find((candidate) => candidate.id === taskId);
+      const threadId = task ? normalizeClaudeThreadId(task.threadId) : null;
+      if (threadId && Object.hasOwn(claudeSessionProgress, threadId)) {
+        releasePendingExecution(taskId);
+      }
+    }
+  }, [claudeSessionProgress, pendingExecutionIds, releasePendingExecution]);
 
   const reconcileProjectAutomation = useCallback(async (): Promise<boolean> => {
     if (!automationRequestContext) {
@@ -2313,17 +2430,25 @@ export function App() {
     const unread = (task.status === "in_review" || task.status === "blocked")
       && readActivityKeys[task.id] !== task.activityKey;
     const taskThreadId = normalizeClaudeThreadId(task.threadId);
-    return [task.id, taskCardPresentation(
+    const presentation = taskCardPresentation(
       task,
       aiThreads,
       unread,
       null,
       null,
       taskThreadId ? claudeSessionProgress[taskThreadId] ?? null : undefined,
-    )];
+    );
+    if (pendingExecutionIds.has(task.id) && !presentation.processing.locked) {
+      return [task.id, {
+        ...presentation,
+        processing: { ...presentation.processing, locked: true },
+      }];
+    }
+    return [task.id, presentation];
   })) as Record<string, TaskCardPresentation>, [
     aiThreads,
     claudeSessionProgress,
+    pendingExecutionIds,
     readActivityKeys,
     tasks,
   ]);
@@ -2601,6 +2726,15 @@ export function App() {
         const restored = await moveTaskRequest(current, previous.status, previous.sortOrder);
         setTasks((tasks) => sortTasks(tasks.map((item) => item.id === restored.id ? restored : item)));
       });
+      // Dragging an issue into in_progress starts an automatic execution for
+      // it right away, one run per issue, tracked like an auto-claimed todo.
+      if (
+        status === "in_progress"
+        && task.status !== "in_progress"
+        && taskPresentations[task.id]?.processing.running !== true
+      ) {
+        void triggerTaskExecution(moved);
+      }
     } catch (error) {
       setTasks((current) => sortTasks(current.map((candidate) =>
         candidate.id === previous.id ? previous : candidate,
@@ -3287,7 +3421,9 @@ export function App() {
   // Native OS folder picker (资源管理器), with the in-app directory browser
   // as fallback when the platform has no picker command.
   async function pickWorkspaceDirectory(onPick: (pickedPath: string) => void, initialPath: string) {
+    if (workspacePicking) return;
     setActionError(null);
+    setWorkspacePicking(true);
     try {
       const picked = await pickNativeDirectoryRequest();
       if (picked.available && picked.path) {
@@ -3295,7 +3431,20 @@ export function App() {
         return;
       }
       if (picked.available && picked.canceled) return;
-    } catch {}
+    } catch (error) {
+      // The dialog takes a second or two to appear, so an impatient second
+      // click can race the first one; point the user at the open dialog
+      // instead of silently dropping back to the in-app browser.
+      if (error instanceof ApiError && error.code === "PICKER_BUSY") {
+        setActionError([
+          "文件夹选择窗口已打开，请在弹出的系统窗口中操作",
+          "A folder picker window is already open; use that system window",
+        ]);
+        return;
+      }
+    } finally {
+      setWorkspacePicking(false);
+    }
     await openWorkspaceBrowser(initialPath);
   }
 
@@ -3867,6 +4016,8 @@ export function App() {
               mutateTaskRelation("remove", current, type, relatedTaskId, origin)
             )}
             onOpenThread={openThread}
+            executionLocked={taskPresentations[detailTask.id]?.processing.locked === true}
+            onTerminateExecution={(task) => void terminateTaskExecution(task)}
             onOpenLegacyLocalThread={openLegacyLocalThread}
             onOpenInTerminal={(threadId) => void continueInTerminal({
               sessionId: threadId,
@@ -4024,6 +4175,7 @@ export function App() {
                         onEdit={openTaskDetail}
                         onUpdate={updateTaskProperties}
                         onComplete={(task) => moveTask(task, "done")}
+                        onTerminateExecution={(task) => void terminateTaskExecution(task)}
                         onContextMenu={openTaskContextMenu}
                         onDragStart={startTaskDrag}
                         onDragEnd={endTaskDrag}
@@ -4316,12 +4468,15 @@ export function App() {
               <button
                 className="button secondary"
                 type="button"
+                disabled={workspacePicking}
                 onClick={() => void pickWorkspaceDirectory(
                   (picked) => { setWorkspaceDraft(picked); setWorkspaceBrowserOpen(false); },
                   workspaceDraft || "",
                 )}
               >
-                {text("浏览…", "Browse…")}
+                {workspacePicking
+                  ? text("正在打开选择窗口…", "Opening picker…")
+                  : text("浏览…", "Browse…")}
               </button>
             </div>
             {renderWorkspaceBrowserPanel((pickedPath) => {
@@ -4413,6 +4568,7 @@ export function App() {
               <button
                 className="button secondary"
                 type="button"
+                disabled={workspacePicking}
                 onClick={() => void pickWorkspaceDirectory(
                   (picked) => {
                     setProjectWorkspaceDraft(picked);
@@ -4422,7 +4578,9 @@ export function App() {
                   (projectWorkspaceTouched ? projectWorkspaceDraft : suggestedCreateWorkspace) || "",
                 )}
               >
-                {text("浏览…", "Browse…")}
+                {workspacePicking
+                  ? text("正在打开选择窗口…", "Opening picker…")
+                  : text("浏览…", "Browse…")}
               </button>
             </div>
             {renderWorkspaceBrowserPanel((pickedPath) => {

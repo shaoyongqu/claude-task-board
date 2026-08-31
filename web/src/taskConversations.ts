@@ -25,6 +25,10 @@ export interface TaskConversationItem {
 
 export interface TaskProcessingPresentation {
   running: boolean;
+  // Execution lock: while the bound session is executing (or a board-triggered
+  // execution is starting up), the card cannot be dragged and its status
+  // cannot be changed until the execution terminates.
+  locked: boolean;
   completed: number | null;
   total: number | null;
   startedAt: string | null;
@@ -197,12 +201,14 @@ export function taskCardPresentation(
       : taskNativeSession !== undefined
         ? taskNativeTodoProgress
         : conversations.find((conversation) => conversation.latestTodo)?.latestTodo ?? null;
+  const executing = task.status === "in_progress"
+    && (Boolean(running) || taskNativeSession?.running === true);
   return {
     conversations,
     unread,
     processing: {
-      running: task.status === "in_progress"
-        && (Boolean(running) || taskNativeSession?.running === true),
+      running: executing,
+      locked: executing,
       completed: latestTodo?.completed ?? null,
       total: latestTodo?.total ?? null,
       startedAt: runningAi?.currentRun?.startedAt ?? null,

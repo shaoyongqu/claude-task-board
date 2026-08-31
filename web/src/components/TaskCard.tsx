@@ -13,6 +13,7 @@ import {
 } from "../types";
 import { labelPresentation } from "../labels";
 import { taskPriorityLabel, useTaskboardI18n } from "../i18n";
+import { TaskboardIcon } from "./TaskboardIcon";
 import { CLAUDE_AGENT_ACTOR, actorKey, assigneeTargetForActor } from "../actors";
 import type {
   TaskCardPresentation,
@@ -46,6 +47,7 @@ interface TaskCardProps {
   onEdit: (task: Task) => void;
   onUpdate: (task: Task, changes: Partial<TaskDraft>) => Promise<Task>;
   onComplete?: (task: Task) => Promise<void>;
+  onTerminateExecution?: (task: Task) => void;
   onContextMenu: (task: Task, position: { x: number; y: number }) => void;
   onDragStart: (task: Task, height: number) => void;
   onDragEnd: () => void;
@@ -196,13 +198,17 @@ function ProcessingProgress({
 }
 
 function ProcessingStatusRow({
+  task,
   presentation,
   now,
   onOpenConversation,
+  onTerminate,
 }: {
+  task: Task;
   presentation: TaskCardPresentation;
   now: number;
   onOpenConversation: (conversation: TaskConversationItem) => void;
+  onTerminate?: (task: Task) => void;
 }) {
   const { text } = useTaskboardI18n();
   const elapsed = elapsedTime(presentation.processing.startedAt, now);
@@ -216,6 +222,24 @@ function ProcessingStatusRow({
           : text("暂停处理", "Processing paused")}
       </span>
       <span className="task-processing-spacer" aria-hidden="true" />
+      {onTerminate && presentation.processing.locked && (
+        <button
+          className="task-processing-stop"
+          type="button"
+          draggable={false}
+          aria-label={text(`终止 ${task.identifier} 的执行`, `Terminate execution of ${task.identifier}`)}
+          title={text("终止执行", "Terminate execution")}
+          onPointerDown={(event) => event.stopPropagation()}
+          onDragStart={(event) => event.preventDefault()}
+          onClick={(event) => {
+            event.stopPropagation();
+            onTerminate(task);
+          }}
+        >
+          <TaskboardIcon name="automationPause" />
+          <span>{text("终止", "Terminate")}</span>
+        </button>
+      )}
       {presentation.conversations.length > 0 && (
         <TaskConversationMenu
           conversations={presentation.conversations}
@@ -402,6 +426,7 @@ export function TaskCard({
   onEdit,
   onUpdate,
   onComplete,
+  onTerminateExecution,
   onContextMenu,
   onDragStart,
   onDragEnd,
@@ -435,6 +460,8 @@ export function TaskCard({
   const showsProperties = Boolean(projectName)
     || (!processingCard && (hasProperties || showsInlineParticipants || showsConversation));
   const propertyDisabled = savingProperty !== null;
+  // Executing issues cannot be dragged until their run terminates.
+  const executionLocked = processingCard && presentation.processing.locked;
 
   function updateProperty(changes: Partial<TaskDraft>, property: NonNullable<typeof savingProperty>) {
     setSavingProperty(property);
@@ -450,7 +477,7 @@ export function TaskCard({
         viewTransitionName: task.status === "in_review" ? `review-task-${task.id}` : "none",
         ...(dragShift ? { transform: `translate3d(0, ${dragShift}px, 0)` } : {}),
       }}
-      draggable={!isMoving}
+      draggable={!isMoving && !executionLocked}
       aria-labelledby={`task-${task.id}-title`}
       data-task-id={task.id}
       data-drag-shift={dragShift || undefined}
@@ -590,9 +617,11 @@ export function TaskCard({
         <>
           <ProcessingProgress presentation={presentation} />
           <ProcessingStatusRow
+            task={task}
             presentation={presentation}
             now={now}
             onOpenConversation={onOpenConversation}
+            onTerminate={onTerminateExecution}
           />
         </>
       )}

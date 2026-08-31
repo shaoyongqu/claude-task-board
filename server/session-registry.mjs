@@ -68,6 +68,10 @@ export class SessionRegistry {
     return session;
   }
 
+  get(sessionId) {
+    return this.sessions.get(sessionId) ?? null;
+  }
+
   list() {
     return [...this.sessions.values()].sort((left, right) => right.sequence - left.sequence);
   }

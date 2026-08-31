@@ -3,13 +3,14 @@ import { fileURLToPath } from "node:url";
 
 const taskctlCliPath = fileURLToPath(new URL("../cli/taskctl.mjs", import.meta.url));
 
-const AUTOMATION_OPERATIONS = new Set(["ensure-active", "pause", "list", "apply-policy"]);
+const AUTOMATION_OPERATIONS = new Set(["ensure-active", "pause", "list", "apply-policy", "run-task", "terminate-task"]);
 const INTERVAL_MINUTES = new Set([5, 10, 15, 30, 60]);
 const HOST_REQUEST_FIELDS = new Set([
   "id",
   "action",
   "requestId",
   "operation",
+  "issueId",
   "taskboardProjectId",
   "codexProjectId",
   "codexProjectKind",
@@ -33,6 +34,9 @@ export function parseTaskboardAutomationHostRequest(value) {
   if (value.action !== undefined && value.action !== "automation") return null;
   if (!validProjectId(value.taskboardProjectId)) return null;
   if (!AUTOMATION_OPERATIONS.has(value.operation)) return null;
+  const taskRunOperation = value.operation === "run-task" || value.operation === "terminate-task";
+  if (taskRunOperation && !validText(value.issueId, 128)) return null;
+  if (value.issueId !== undefined && !validText(value.issueId, 128)) return null;
   if (!validText(value.projectName, 200)) return null;
   const codexProjectKind = value.codexProjectKind ?? "local";
   const codexHostId = value.codexHostId ?? "local";
@@ -60,6 +64,7 @@ export function parseTaskboardAutomationHostRequest(value) {
     action: "automation",
     requestId: value.requestId ?? "",
     operation: value.operation,
+    ...(value.issueId === undefined ? {} : { issueId: value.issueId }),
     taskboardProjectId: value.taskboardProjectId,
     codexProjectId,
     codexProjectKind,
@@ -112,6 +117,27 @@ function buildTaskctlCommand(request) {
 
 function shellQuote(value) {
   return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+// Prompt for a board-triggered execution of one specific issue: the user
+// dragged the issue to in_progress and the board already bound it to this
+// session, so the controller reads, executes, verifies, comments, and moves it
+// to in_review — the same lifecycle an auto-claimed todo goes through.
+export function buildTaskboardTaskRunPrompt(request) {
+  const taskctlCommand = buildTaskctlCommand(request);
+  const bindingOptions = `--binding-thread-id "$CLAUDE_THREAD_ID" --binding-codex-project-id ${JSON.stringify(request.codexProjectId)} --binding-codex-project-kind "local" --binding-codex-host-id "local" --binding-workspace-path ${JSON.stringify(request.workspacePath)}`;
+  const executionInstructions = [
+    `先运行 ${taskctlCommand} issue get ${request.issueId} --json 读取最新议题内容，再运行 comment list 读取全部评论。根据描述和最新评论判断是否允许开始；若其中写明等待、暂不执行或当前不应开始，报告并结束本轮，不改状态。`,
+    `该议题已由用户移入处理中并绑定到当前会话（threadId 为 $CLAUDE_THREAD_ID）。若 issue get 显示绑定不是当前会话，立即报告并结束，不要改写他人的绑定。`,
+    `确认允许开始后，在本会话内完成实现和验证，不要派发给其他会话。若议题绑定了 branch 或 worktree，必须在该议题绑定的开发上下文执行。`,
+    `执行完成并验证后，先用 comment add 记录关键改动、验证结果、执行结果和剩余风险，再运行 issue get 读取最新 version，并使用显式 --if-version 和完整 binding（${bindingOptions}）将议题移动到 in_review；成功后更新 ownedVersion。不要省略 binding，不要直接标记为 done。`,
+    "若因 version 陈旧发生版本冲突，重新运行 issue get 和 comment list；仅当描述和最新评论未变化且仍绑定当前会话时，用最新 version 重试一次；仍失败则报告并结束。",
+  ];
+  return [
+    `使用 manage-taskboard 技能（目录 ${request.skillPath}）处理任务面板工作。议题 ${request.issueId} 已由用户在看板移入「处理中」，需要你立即认领并完成。`,
+    `本轮所有 taskctl 操作都使用完整命令前缀 ${taskctlCommand}，不要使用 PATH 中的 taskctl。当前会话 ID 已通过环境变量 CLAUDE_THREAD_ID 注入。`,
+    ...executionInstructions,
+  ].join("\n");
 }
 
 export function buildTaskboardAutomationSpec(request) {

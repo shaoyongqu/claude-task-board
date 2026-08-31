@@ -128,6 +128,8 @@ interface TaskDetailProps {
   onOpenInTerminal: (threadId: string) => void;
   onOpenLegacyLocalThread: (threadId: string) => void;
   onOpenInThread: (task: Task) => void;
+  executionLocked?: boolean;
+  onTerminateExecution?: (task: Task) => void;
   onCopy: (text: string, announcement: string) => void;
   openingThread: boolean;
   onError: (message: TaskDetailError | null) => void;
@@ -387,6 +389,8 @@ export function TaskDetail({
   onOpenLegacyLocalThread,
   onOpenInTerminal,
   onOpenInThread,
+  executionLocked = false,
+  onTerminateExecution,
   onCopy,
   openingThread,
   onError,
@@ -1514,7 +1518,7 @@ export function TaskDetail({
                     />
                   </div>
                   <div>
-                    {currentTask.status !== "todo" && (
+                    {currentTask.status !== "todo" && !executionLocked && (
                       <div className="comment-status-action">
                         <span>{text("改变状态为-等待认领", "Change status to Todo")}</span>
                         <button
@@ -1615,9 +1619,12 @@ export function TaskDetail({
                   icon: <StatusIcon status={status} color="currentColor" size={14} />,
                 }))}
                 open={propertyMenu === "status"}
-                disabled={savingProperty === "status"}
+                disabled={savingProperty === "status" || executionLocked}
                 className="detail-property-picker"
                 triggerClassName="detail-property-trigger"
+                title={executionLocked
+                  ? text("执行终止前无法更改状态", "Status is locked until the execution terminates")
+                  : undefined}
                 triggerContent={(
                   <>
                     <span className="task-property-trigger-icon">
@@ -1632,6 +1639,16 @@ export function TaskDetail({
                 onOpenChange={(open) => setPropertyMenu(open ? "status" : null)}
                 onChange={(status) => void saveTask({ status }, "status")}
               />
+              {executionLocked && onTerminateExecution && (
+                <button
+                  className="detail-terminate-button"
+                  type="button"
+                  onClick={() => onTerminateExecution(currentTask)}
+                >
+                  <span className="detail-terminate-glyph" aria-hidden="true" />
+                  {text("终止执行", "Terminate execution")}
+                </button>
+              )}
             </div>
             <div className="detail-property-row">
               <span className="detail-property-label">{text("优先级", "Priority")}</span>
