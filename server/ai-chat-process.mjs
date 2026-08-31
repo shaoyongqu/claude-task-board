@@ -260,13 +260,30 @@ export function normalizeClaudeEvent(raw, pendingTools = new Map()) {
 // provider preset). Claude Code's ~/.claude/settings.json env block overrides
 // inherited process env, so profiles are also passed through a --settings JSON
 // argument (which outranks user settings) to survive ccswitch rewrites.
+// ccswitch rewrites a whole ANTHROPIC_DEFAULT_*_MODEL alias family (plus a
+// top-level "model") into ~/.claude/settings.json; Claude Code resolves alias
+// and background-model requests through those keys, so a profile must pin them
+// too or the current ccswitch preset keeps winning.
+const MODEL_ALIAS_KEYS = [
+  "ANTHROPIC_DEFAULT_SONNET_MODEL",
+  "ANTHROPIC_DEFAULT_OPUS_MODEL",
+  "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+  "ANTHROPIC_DEFAULT_FABLE_MODEL",
+];
+
 export function modelProfileEnvironment(profile) {
   if (!profile) return {};
   const env = {};
   if (profile.baseUrl) env.ANTHROPIC_BASE_URL = profile.baseUrl;
   if (profile.authToken) env.ANTHROPIC_AUTH_TOKEN = profile.authToken;
-  if (profile.model) env.ANTHROPIC_MODEL = profile.model;
-  if (profile.smallFastModel) env.ANTHROPIC_SMALL_FAST_MODEL = profile.smallFastModel;
+  if (profile.model) {
+    env.ANTHROPIC_MODEL = profile.model;
+    for (const key of MODEL_ALIAS_KEYS) env[key] = profile.model;
+  }
+  if (profile.smallFastModel) {
+    env.ANTHROPIC_SMALL_FAST_MODEL = profile.smallFastModel;
+    env.ANTHROPIC_DEFAULT_HAIKU_MODEL = profile.smallFastModel;
+  }
   return env;
 }
 

@@ -47,10 +47,11 @@ function runPicker(command, args) {
 }
 
 // Win32 helper injected into the PowerShell picker. Foreground activation is
-// denied to windows created by the hidden background server process, so the
-// dialog can end up behind the foreground browser no matter what owner form
-// hosts it. The picker timer grabs the dialog's own HWND while the modal
-// message loop is pumping and forces HWND_TOPMOST directly on it.
+// denied to windows created by the hidden background server process, and the
+// common dialog also strips the topmost style during its own internal layout
+// calls, which sinks the dialog behind the foreground browser again. The
+// picker timer therefore patrols for the whole lifetime of the dialog and
+// re-applies HWND_TOPMOST whenever the style was lost.
 const WINDOWS_CS = `using System;
 using System.Runtime.InteropServices;
 public class PickerTopmost {
@@ -61,11 +62,49 @@ public class PickerTopmost {
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
   [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttachFrom, uint idAttachTo, bool fAttach);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+  public static bool IsTopmost(IntPtr hWnd) {
+    return (GetWindowLong(hWnd, -20) & 0x8) != 0;
+  }
+  // A WinForms timer only ticks when the common dialog's modal loop dispatches
+  // WM_TIMER, which is unreliable; a threading timer patrols on its own
+  // thread instead.
+  private static System.Threading.Timer patrol;
+  public static void StartPatrol(uint pid) {
+    patrol = new System.Threading.Timer(delegate(object state) {
+      try {
+        IntPtr h = FindDialog(pid);
+        if (h != IntPtr.Zero && !IsTopmost(h)) Force(h);
+      } catch {}
+    }, null, 100, 300);
+  }
+  public static void StopPatrol() {
+    if (patrol != null) patrol.Dispose();
+    patrol = null;
+  }
   public static void Force(IntPtr hWnd) {
+    // Windows denies SetForegroundWindow to background processes; attaching
+    // the dialog's thread to the foreground window's thread grants the right
+    // for the duration of the call. Runs on the patrol thread, so the
+    // dialog's own thread id is resolved from its window handle.
+    uint dlgPid;
+    uint dlgThread = GetWindowThreadProcessId(hWnd, out dlgPid);
+    IntPtr fg = GetForegroundWindow();
+    uint fgThread = 0;
+    if (fg != IntPtr.Zero) {
+      uint fgPid;
+      fgThread = GetWindowThreadProcessId(fg, out fgPid);
+      if (fgThread != 0 && fgThread != dlgThread) AttachThreadInput(dlgThread, fgThread, true);
+    }
     // HWND_TOPMOST with SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW
     SetWindowPos(hWnd, new IntPtr(-1), 0, 0, 0, 0, 0x43);
     SetForegroundWindow(hWnd);
+    BringWindowToTop(hWnd);
+    if (fgThread != 0 && fgThread != dlgThread) AttachThreadInput(dlgThread, fgThread, false);
   }
   public static IntPtr FindDialog(uint pid) {
     IntPtr best = IntPtr.Zero; int bestArea = 0;
@@ -73,7 +112,12 @@ public class PickerTopmost {
       uint wpid; GetWindowThreadProcessId(h, out wpid);
       if (wpid == pid && IsWindowVisible(h)) {
         RECT r; GetWindowRect(h, out r);
-        int area = (r.Right - r.Left) * (r.Bottom - r.Top);
+        int w = r.Right - r.Left;
+        int hgt = r.Bottom - r.Top;
+        // The common dialog keeps a few small internal helper windows in this
+        // process; only a window of real dialog size counts as the dialog.
+        if (w < 100 || hgt < 100) return true;
+        int area = w * hgt;
         if (area > bestArea) { bestArea = area; best = h; }
       }
       return true;
@@ -89,27 +133,9 @@ const WINDOWS_PS = [
   "$dialog = New-Object System.Windows.Forms.FolderBrowserDialog;",
   "$dialog.Description = '选择项目工作目录 / Choose a project workspace';",
   "$dialog.ShowNewFolderButton = $true;",
-  "$owner = New-Object System.Windows.Forms.Form;",
-  "$owner.TopMost = $true;",
-  "$owner.ShowInTaskbar = $false;",
-  "$owner.StartPosition = 'Manual';",
-  "$owner.Size = New-Object System.Drawing.Size(1,1);",
-  "$owner.Location = New-Object System.Drawing.Point(0,0);",
-  "$owner.Show();",
-  "$owner.Activate();",
-  "$timer = New-Object System.Windows.Forms.Timer;",
-  "$timer.Interval = 100;",
-  "$timer.Add_Tick({",
-  "  $h = [PickerTopmost]::FindDialog($PID);",
-  "  if ($h -ne [IntPtr]::Zero) {",
-  "    [PickerTopmost]::Force($h);",
-  "    $timer.Stop();",
-  "  }",
-  "});",
-  "$timer.Start();",
-  "$result = $dialog.ShowDialog($owner);",
-  "$timer.Stop();",
-  "$owner.Close(); $owner.Dispose();",
+  "[PickerTopmost]::StartPatrol($PID);",
+  "$result = $dialog.ShowDialog();",
+  "[PickerTopmost]::StopPatrol();",
   "if ($result -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $dialog.SelectedPath }",
 ].join("\n");
 
