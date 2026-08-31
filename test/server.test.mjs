@@ -48,16 +48,22 @@ async function request(baseUrl, pathname, options = {}) {
   };
 }
 
-async function requestWithHost(baseUrl, host, headers = {}) {
-  const target = new URL("/health", baseUrl);
+async function requestWithHost(baseUrl, host, headers = {}, pathname = "/health") {
+  const target = new URL(pathname, baseUrl);
   return new Promise((resolve, reject) => {
     const outgoing = httpRequest(target, { headers: { host, ...headers } }, (response) => {
       const chunks = [];
       response.on("data", (chunk) => chunks.push(chunk));
-      response.on("end", () => resolve({
-        status: response.statusCode,
-        body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
-      }));
+      response.on("end", () => {
+        const text = Buffer.concat(chunks).toString("utf8");
+        let body;
+        try {
+          body = JSON.parse(text);
+        } catch {
+          body = undefined;
+        }
+        resolve({ status: response.statusCode, body, text });
+      });
     });
     outgoing.on("error", reject);
     outgoing.end();
@@ -443,11 +449,15 @@ test("accepts private LAN requests and rejects public Host and Origin headers", 
   assert.equal(originResult.body.error.code, "INVALID_ORIGIN");
 });
 
-test("trusted HTTPS origins allow a loopback reverse tunnel for HTTP and SSE only", async () => {
+test("trusted HTTPS origins allow their exact public Host without trusting forwarded headers", async () => {
   const trustedOrigin = "https://board.example.test";
-  const baseUrl = await startServer(() => ({
-    processEnv: { ...process.env, CLAUDE_TASKBOARD_TRUSTED_ORIGINS: trustedOrigin },
-  }));
+  const baseUrl = await startServer(async (directory) => {
+    await writeFile(path.join(directory, "index.html"), "<!doctype html><title>Taskboard</title>");
+    return {
+      staticDirectory: directory,
+      processEnv: { ...process.env, CLAUDE_TASKBOARD_TRUSTED_ORIGINS: trustedOrigin },
+    };
+  });
   const host = "127.0.0.1";
 
   for (const [origin, expectedStatus] of [
@@ -463,19 +473,42 @@ test("trusted HTTPS origins allow a loopback reverse tunnel for HTTP and SSE onl
     assert.equal(events.status, expectedStatus);
   }
 
-  const publicHost = await requestWithHost(baseUrl, "board.example.test", {
+  const publicPage = await requestWithHost(baseUrl, "board.example.test", {}, "/");
+  assert.equal(publicPage.status, 200);
+  assert.match(publicPage.text, /<title>Taskboard<\/title>/);
+
+  const publicApi = await requestWithHost(baseUrl, "board.example.test", {}, "/api/projects");
+  assert.equal(publicApi.status, 200);
+  assert.equal(publicApi.body.projects.length, 1);
+
+  const publicHostAndOrigin = await requestWithHost(baseUrl, "board.example.test", {
     origin: trustedOrigin,
   });
-  assert.equal(publicHost.status, 403);
-  assert.equal(publicHost.body.error.code, "INVALID_HOST");
+  assert.equal(publicHostAndOrigin.status, 200);
+
+  const publicHostWithForeignOrigin = await requestWithHost(baseUrl, "board.example.test", {
+    origin: "https://other.example.test",
+  });
+  assert.equal(publicHostWithForeignOrigin.status, 403);
+  assert.equal(publicHostWithForeignOrigin.body.error.code, "INVALID_ORIGIN");
+
+  const publicHostWithWrongPort = await requestWithHost(baseUrl, "board.example.test:8443");
+  assert.equal(publicHostWithWrongPort.status, 403);
+  assert.equal(publicHostWithWrongPort.body.error.code, "INVALID_HOST");
 
   const forwardedHost = await requestWithHost(baseUrl, "untrusted.example.test", {
     origin: trustedOrigin,
-    "x-forwarded-host": host,
+    "x-forwarded-host": "board.example.test",
     "x-forwarded-proto": "https",
   });
   assert.equal(forwardedHost.status, 403);
   assert.equal(forwardedHost.body.error.code, "INVALID_HOST");
+
+  const wrongOriginPort = await requestWithHost(baseUrl, host, {
+    origin: "https://board.example.test:8443",
+  });
+  assert.equal(wrongOriginPort.status, 403);
+  assert.equal(wrongOriginPort.body.error.code, "INVALID_ORIGIN");
 });
 
 test("trusted HTTPS origins do not inherit device-local capabilities from tunnel loopback", async () => {

@@ -963,7 +963,11 @@ export function TaskDetail({
   ) {
     developmentOptions.unshift(currentTask.developmentContext);
   }
-  const assigneeOptions = [currentTask.assignee, currentUser, CLAUDE_AGENT_ACTOR]
+  const displayAssignee = currentTask.assignee.type === currentUser.type
+    && currentTask.assignee.id === currentUser.id
+    ? currentUser
+    : currentTask.assignee;
+  const assigneeOptions = [displayAssignee, currentUser, CLAUDE_AGENT_ACTOR]
     .filter((actor, index, actors) => (
       actors.findIndex((candidate) => actorKey(candidate) === actorKey(actor)) === index
     ));
@@ -1672,10 +1676,10 @@ export function TaskDetail({
             <div className="detail-property-row assignee-property">
               <span className="detail-property-label">{text("负责人", "Assignee")}</span>
               <TaskPropertyPicker
-                value={actorKey(currentTask.assignee)}
+                value={actorKey(displayAssignee)}
                 options={assigneeOptions.map((actor) => ({
                   value: actorKey(actor),
-                  label: actor.id === currentUser.id
+                  label: actorKey(actor) === actorKey(currentUser)
                     ? `${actor.name}${text("（我）", " (me)")}`
                     : actor.name,
                   icon: <ActorAvatar actor={actor} className="task-property-assignee-avatar" />,

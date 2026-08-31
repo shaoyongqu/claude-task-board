@@ -70,7 +70,7 @@ Inside a board-driven Claude session, `taskctl` reads `CLAUDE_THREAD_ID` automat
 | `CLAUDE_TASKBOARD_DATA_DIR` | `.data` | SQLite data directory |
 | `CLAUDE_TASKBOARD_URL` | `http://127.0.0.1:47823` | CLI API origin |
 | `CLAUDE_TASKBOARD_MODELS` | Claude defaults | JSON model catalog, e.g. `[{"slug":"glm-5.3","supportedReasoningEfforts":["low","high"]}]` |
-| `CLAUDE_TASKBOARD_TRUSTED_ORIGINS` | unset | Comma-separated exact HTTPS origins allowed through a loopback reverse tunnel |
+| `CLAUDE_TASKBOARD_TRUSTED_ORIGINS` | unset | Comma-separated exact HTTPS origins allowed through a loopback reverse tunnel; a configured origin is also accepted as the request `Host`, so the proxy does not need to rewrite it to a private address |
 | `CLAUDE_EXECUTABLE` | auto-detected | Path to the `claude` CLI |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude home used for skill/agent/command discovery |
 

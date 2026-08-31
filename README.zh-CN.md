@@ -95,7 +95,7 @@ npm run taskctl -- issue create \
 | `CLAUDE_TASKBOARD_DATA_DIR` | `.data` | SQLite 数据目录 |
 | `CLAUDE_TASKBOARD_URL` | `http://127.0.0.1:47823` | CLI API 地址 |
 | `CLAUDE_TASKBOARD_MODELS` | Claude 默认 | JSON 模型目录，如 `[{"slug":"glm-5.3","supportedReasoningEfforts":["low","high"]}]` |
-| `CLAUDE_TASKBOARD_TRUSTED_ORIGINS` | 未设置 | 环回反向隧道允许的精确 HTTPS Origin，逗号分隔 |
+| `CLAUDE_TASKBOARD_TRUSTED_ORIGINS` | 未设置 | 环回反向隧道允许的精确 HTTPS Origin，逗号分隔；配置的 Origin 也可直接作为请求 `Host` 通过校验，代理无需重写为内网地址 |
 | `CLAUDE_EXECUTABLE` | 自动探测 | `claude` CLI 路径 |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | 技能/代理/命令发现使用的 Claude 主目录 |
 
