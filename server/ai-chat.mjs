@@ -15,6 +15,7 @@ import {
   buildClaudeArgs,
   buildClaudePrompt,
   modelProfileEnvironment,
+  modelProfileSettingsArg,
   normalizeClaudeEvent,
   spawnClaudeTurn,
 } from "./ai-chat-process.mjs";
@@ -362,6 +363,8 @@ export class AiChatService {
       // ANTHROPIC_MODEL, so the --model alias flag must not override it.
       const argThread = modelProfile?.model ? { ...thread, model: "default" } : thread;
       const args = buildClaudeArgs(argThread, resolved.addDirectories, turnSessionId);
+      const profileSettings = modelProfileSettingsArg(modelProfile);
+      if (profileSettings) args.splice(args.length - 1, 0, "--settings", profileSettings);
       const prompt = buildClaudePrompt(
         thread,
         {

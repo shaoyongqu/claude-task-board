@@ -8,7 +8,11 @@ import {
   buildTaskboardAutomationPrompt,
   taskboardAutomationPolicyOperation,
 } from "../shared/taskboard-automation.mjs";
-import { modelProfileEnvironment, spawnClaudeTurn } from "./ai-chat-process.mjs";
+import {
+  modelProfileEnvironment,
+  modelProfileSettingsArg,
+  spawnClaudeTurn,
+} from "./ai-chat-process.mjs";
 import { ApiError } from "./database.mjs";
 import { getQuotaStatus } from "./quota.mjs";
 
@@ -217,8 +221,10 @@ export class LocalAutomationScheduler {
       "WebFetch",
       "--session-id",
       sessionId,
-      "-",
     ];
+    const profileSettings = modelProfileSettingsArg(modelProfile);
+    if (profileSettings) args.push("--settings", profileSettings);
+    args.push("-");
     let exitCode = null;
     let failure = "";
     entry.running = new Promise((resolve) => {

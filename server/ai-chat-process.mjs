@@ -257,8 +257,9 @@ export function normalizeClaudeEvent(raw, pendingTools = new Map()) {
 }
 
 // Per-session vendor environment for a resolved model profile (ccswitch-style
-// provider preset). Passed through extraEnv so every spawned `claude` turn is
-// independent: profiles never rewrite ~/.claude/settings.json.
+// provider preset). Claude Code's ~/.claude/settings.json env block overrides
+// inherited process env, so profiles are also passed through a --settings JSON
+// argument (which outranks user settings) to survive ccswitch rewrites.
 export function modelProfileEnvironment(profile) {
   if (!profile) return {};
   const env = {};
@@ -267,6 +268,11 @@ export function modelProfileEnvironment(profile) {
   if (profile.model) env.ANTHROPIC_MODEL = profile.model;
   if (profile.smallFastModel) env.ANTHROPIC_SMALL_FAST_MODEL = profile.smallFastModel;
   return env;
+}
+
+export function modelProfileSettingsArg(profile) {
+  const env = modelProfileEnvironment(profile);
+  return Object.keys(env).length > 0 ? JSON.stringify({ env }) : null;
 }
 
 export function buildClaudeArgs(thread, addDirectories = [], sessionId = null) {
