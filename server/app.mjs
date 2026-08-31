@@ -2001,7 +2001,12 @@ export function createTaskboardServer(options = {}) {
   const claudeSessionSearches = new Map();
   const claudeSessionStateCache = new Map();
 
-  function withRegisteredRunning(state, registeredSession) {
+  function resolveRunningState(state, threadId, registeredSession) {
+    // Priority: a controller process this server spawned (exact liveness) >
+    // hooks-reported session lifecycle > the transcript-tail heuristic.
+    if (automationScheduler.isThreadLive(threadId)) {
+      return { ...state, running: true };
+    }
     if (!registeredSession) return state;
     return { ...state, running: !registeredSession.endedAt };
   }
@@ -2016,12 +2021,10 @@ export function createTaskboardServer(options = {}) {
   }
 
   async function readClaudeSessionState(threadId) {
-    // The hooks-reported lifecycle is authoritative for "running": SessionStart
-    // marks the session alive until SessionEnd, so the flag stays stable while
-    // the transcript's newest record alternates between assistant output and
-    // user tool results. The tail heuristic below only covers sessions the
-    // registry never saw (board restarted mid-session, workspace without
-    // board hooks).
+    // "Running" is resolved from the strongest available signal: scheduler
+    // process liveness for board-spawned turns, the hooks-reported lifecycle
+    // (SessionStart..SessionEnd) when the registry knows the session, and a
+    // transcript-tail heuristic as the fallback for everything else.
     const registeredSession = sessionRegistry.get(threadId);
     const sessionPath = await findClaudeSession(threadId);
     if (!sessionPath) return null;
@@ -2029,7 +2032,7 @@ export function createTaskboardServer(options = {}) {
     const sessionStat = await stat(sessionPath);
     const cached = claudeSessionStateCache.get(sessionPath);
     if (cached?.size === sessionStat.size && cached.mtimeMs === sessionStat.mtimeMs) {
-      return withRegisteredRunning(cached.state, registeredSession);
+      return resolveRunningState(cached.state, threadId, registeredSession);
     }
 
     const length = Math.min(sessionStat.size, CLAUDE_SESSION_TAIL_BYTES);
@@ -2050,9 +2053,12 @@ export function createTaskboardServer(options = {}) {
       } catch {}
     }
 
-    // Claude Code persists one JSON record per stream event; a session not
-    // known to the hooks registry is considered running when its newest record
-    // is an assistant message written within the last two minutes.
+    // Claude Code persists one JSON record per stream event. For sessions not
+    // covered by a stronger signal, recent activity counts as running: the
+    // newest record is an assistant message (model output) or a user record
+    // (a tool result just returned / a new prompt just landed) written within
+    // the last two minutes. The record type alternates assistant/user during
+    // tool use, so both types must count or the status flickers.
     let lastRecord = null;
     for (let index = records.length - 1; index >= 0; index -= 1) {
       if (records[index]?.type) {
@@ -2061,7 +2067,11 @@ export function createTaskboardServer(options = {}) {
       }
     }
     let running = false;
-    if (!registeredSession && lastRecord?.type === "assistant" && typeof lastRecord.timestamp === "string") {
+    if (
+      !registeredSession
+      && (lastRecord?.type === "assistant" || lastRecord?.type === "user")
+      && typeof lastRecord.timestamp === "string"
+    ) {
       const lastTimestamp = Date.parse(lastRecord.timestamp);
       running = Number.isFinite(lastTimestamp)
         && Date.now() - lastTimestamp < 2 * 60 * 1_000
@@ -2088,11 +2098,11 @@ export function createTaskboardServer(options = {}) {
       }
     }
 
-    const state = withRegisteredRunning({
+    const state = resolveRunningState({
       completed: progress?.completed ?? null,
       total: progress?.total ?? null,
       running,
-    }, registeredSession);
+    }, threadId, registeredSession);
     claudeSessionStateCache.set(sessionPath, {
       size: sessionStat.size,
       mtimeMs: sessionStat.mtimeMs,

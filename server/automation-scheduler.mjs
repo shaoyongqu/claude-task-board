@@ -43,12 +43,22 @@ export class LocalAutomationScheduler {
     // Board-triggered executions of individual issues; keyed by issueId so
     // multiple issues can run concurrently, independent of the tick loop.
     this.taskRuns = new Map();
+    // Session ids of controller turns this process spawned and can still see
+    // alive. Process liveness is the most precise "running" signal for the
+    // board's own sessions — no transcript heuristics or hooks needed.
+    this.liveThreads = new Set();
     this.closed = false;
     this.#loadPersisted();
   }
 
   setBoardBaseUrl(baseUrl) {
     this.boardBaseUrl = typeof baseUrl === "string" && baseUrl.trim() ? baseUrl.trim() : null;
+  }
+
+  // Whether a controller turn spawned by this scheduler is still running for
+  // the given Claude session id.
+  isThreadLive(threadId) {
+    return this.liveThreads.has(threadId);
   }
 
   #loadPersisted() {
@@ -207,6 +217,7 @@ export class LocalAutomationScheduler {
     let followUp = false;
     let exitCode = null;
     let failure = "";
+    let turnSessionId = null;
     try {
       if (!this.#hasTodo(request)) {
         entry.lastError = null;
@@ -217,6 +228,8 @@ export class LocalAutomationScheduler {
       }
 
       const sessionId = randomUUID();
+      turnSessionId = sessionId;
+      this.liveThreads.add(sessionId);
       entry.running = new Promise((resolve) => {
         const { child, completion } = this.#spawnControllerTurn(
           request,
@@ -244,6 +257,7 @@ export class LocalAutomationScheduler {
     } finally {
       entry.running = null;
       entry.child = null;
+      if (turnSessionId) this.liveThreads.delete(turnSessionId);
     }
     // An unexpected failure must not leave the automation disarmed with its
     // switch still on, so every completed tick re-arms the next one.
@@ -330,6 +344,7 @@ export class LocalAutomationScheduler {
       lastError: null,
     };
     this.taskRuns.set(request.issueId, run);
+    this.liveThreads.add(sessionId);
     run.running = new Promise((resolve) => {
       const { child, completion } = this.#spawnControllerTurn(
         request,
@@ -346,6 +361,7 @@ export class LocalAutomationScheduler {
       );
     });
     void run.running.then(() => {
+      this.liveThreads.delete(sessionId);
       if (this.taskRuns.get(request.issueId) === run) this.taskRuns.delete(request.issueId);
     });
     return { item: this.#sanitizeTaskRun(request.issueId), task: updated };
@@ -469,5 +485,6 @@ export class LocalAutomationScheduler {
     }
     this.entries.clear();
     this.taskRuns.clear();
+    this.liveThreads.clear();
   }
 }
