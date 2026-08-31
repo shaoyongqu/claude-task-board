@@ -387,6 +387,8 @@ export interface TaskRelationSummary {
   externalKey?: string | null;
   projectId: string;
   title: string;
+  /** Present on parent summaries so sub-issue agents perceive parent content. */
+  description?: string | null;
   status: TaskStatus;
   priority: TaskPriority;
   assignee: ActorIdentity;

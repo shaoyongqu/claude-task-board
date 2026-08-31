@@ -934,10 +934,10 @@ test("a human moving an issue back to todo releases the session binding", async 
 
 test("issues support parent, sub-issue, blocking, and related issue relationships", async () => {
   const baseUrl = await startServer();
-  const createIssue = async (title, status = "todo", projectId = "local") => {
+  const createIssue = async (title, status = "todo", projectId = "local", description = undefined) => {
     const result = await request(baseUrl, "/api/tasks", {
       method: "POST",
-      body: { projectId, title, status },
+      body: { projectId, title, status, ...(description === undefined ? {} : { description }) },
     });
     assert.equal(result.response.status, 201);
     return result.body.task;
@@ -954,7 +954,7 @@ test("issues support parent, sub-issue, blocking, and related issue relationship
     )
   );
 
-  const parent = await createIssue("Parent issue");
+  const parent = await createIssue("Parent issue", "todo", "local", "Parent requirement context");
   const child = await createIssue("Child issue", "done");
   const grandchild = await createIssue("Grandchild issue", "canceled");
   const blocker = await createIssue("Blocking issue", "in_progress");
@@ -965,6 +965,9 @@ test("issues support parent, sub-issue, blocking, and related issue relationship
   assert.equal(parentAdded.body.task.version, child.version + 1);
   assert.equal(parentAdded.body.task.threadId, "thread-relations");
   assert.equal(parentAdded.body.task.relations.parent.id, parent.id);
+  // The parent summary carries the parent's description so sub-issue agents
+  // perceive the parent's requirement from issue get alone.
+  assert.equal(parentAdded.body.task.relations.parent.description, "Parent requirement context");
   assert.equal(parentAdded.body.relatedTask.id, parent.id);
 
   const parentAfterAdd = await latest(parent.id);
