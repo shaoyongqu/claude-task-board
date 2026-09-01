@@ -39,34 +39,38 @@ const UNSUPPORTED_COMPOSER_SOURCES = [
   { kind: "customPrompts", state: "unsupported", reasonCode: "NO_STABLE_CATALOG" },
 ];
 
+// Effort ladder mirrors `claude --effort` (low, medium, high, xhigh, max) so
+// board sessions can request the CLI's top reasoning level.
+const SUPPORTED_REASONING_EFFORTS = ["low", "medium", "high", "max"];
+
 const DEFAULT_MODELS = [
   {
     slug: "default",
     displayName: "Default",
     description: "The model configured in Claude Code",
     defaultReasoningEffort: "medium",
-    supportedReasoningEfforts: ["low", "medium", "high"],
+    supportedReasoningEfforts: SUPPORTED_REASONING_EFFORTS,
   },
   {
     slug: "sonnet",
     displayName: "Sonnet",
     description: "Balanced quality and speed",
     defaultReasoningEffort: "medium",
-    supportedReasoningEfforts: ["low", "medium", "high"],
+    supportedReasoningEfforts: SUPPORTED_REASONING_EFFORTS,
   },
   {
     slug: "opus",
     displayName: "Opus",
     description: "Highest capability",
     defaultReasoningEffort: "high",
-    supportedReasoningEfforts: ["low", "medium", "high"],
+    supportedReasoningEfforts: SUPPORTED_REASONING_EFFORTS,
   },
   {
     slug: "haiku",
     displayName: "Haiku",
     description: "Fastest responses",
     defaultReasoningEffort: "low",
-    supportedReasoningEfforts: ["low", "medium", "high"],
+    supportedReasoningEfforts: SUPPORTED_REASONING_EFFORTS,
   },
 ];
 
