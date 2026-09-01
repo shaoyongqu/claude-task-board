@@ -95,7 +95,7 @@ export function buildTaskboardAutomationPrompt(request) {
     "完成 issue get 和 comment list 后、移动状态前，必须再次运行 issue get，并复核 relations.blockedBy 仍为空或其中每个依赖的 status 都严格等于 done。若依赖条件不再满足，立即跳过并结束本轮，不改状态，也不暂停自动化。",
     `确认允许开始后，只有 threadId 和 threadBinding 都为空且仍为未归档 todo 的议题才可在读取代码、下载附件、分析或实施前认领。认领必须使用刚读取的 version 移到 in_progress，并显式传 --binding-thread-id "$CLAUDE_THREAD_ID"、--binding-codex-project-id ${JSON.stringify(request.codexProjectId)}、--binding-codex-project-kind "local"、--binding-codex-host-id "local"、--binding-workspace-path ${JSON.stringify(request.workspacePath)}，把当前会话一次写成完整 binding；记录响应 task.version 为 ownedVersion。写入成功前不得继续。已有完整 binding 或 legacy local binding 的议题不得由本轮认领；不得认领已被其他会话绑定或其他 Agent 领取的议题。认领后的每一次 issue move 都必须显式传 ownedVersion 和这五个完整 binding 字段，成功后更新 ownedVersion。`,
     "若因 version 陈旧发生版本冲突，重新运行 issue get 和 comment list；仅当仍为可认领 todo、未绑定其他会话、未归档且描述和最新评论未变化时，用最新 version 重试一次。若已被认领、状态或要求已变、已归档、服务或永久 API 错误，或重试仍失败，立即跳过该议题、退出并报告；不得抢占或循环重试。",
-    `认领成功后、读取代码或制定实现方案前，先运行 ${taskctlCommand} project readme get ${request.taskboardProjectId} --json 读取项目文档。若返回的 readme.content 非空，其中记录的架构、约束与约定必须作为本轮实现和验证的强制要求；若为空，直接继续。`,
+    `项目文档（架构、约束与约定）可在需要时用 ${taskctlCommand} project readme get ${request.taskboardProjectId} --json 读取。`,
     "若议题已绑定 branch 或 worktree，必须在该议题绑定的开发上下文执行，避免并行会话修改同一工作目录。",
     "在本会话内完成实现和验证，不要派发给其他会话。执行完成并验证后，先用 comment add 记录关键改动、验证结果、执行结果和剩余风险，再使用 ownedVersion、显式 --if-version 和认领时保存的完整 binding 将议题移动到 in_review；成功后更新 ownedVersion。不要省略 binding，避免把完整绑定降级为 legacy local；不要直接标记为 done。",
   ];
@@ -131,7 +131,7 @@ export function buildTaskboardTaskRunPrompt(request) {
     `先运行 ${taskctlCommand} issue get ${request.issueId} --json 读取最新议题内容，再运行 comment list 读取全部评论。根据描述和最新评论判断是否允许开始；若其中写明等待、暂不执行或当前不应开始，报告并结束本轮，不改状态。`,
     `该议题已由用户移入处理中并绑定到当前会话（threadId 为 $CLAUDE_THREAD_ID）。若 issue get 显示绑定不是当前会话，立即报告并结束，不要改写他人的绑定。`,
     `确认允许开始后，在本会话内完成实现和验证，不要派发给其他会话。若议题绑定了 branch 或 worktree，必须在该议题绑定的开发上下文执行。`,
-    `开始实现前，先运行 ${taskctlCommand} project readme get ${request.taskboardProjectId} --json 读取项目文档。若返回的 readme.content 非空，其中记录的架构、约束与约定必须作为本轮实现和验证的强制要求；若为空，直接继续。`,
+    `项目文档（架构、约束与约定）可在需要时用 ${taskctlCommand} project readme get ${request.taskboardProjectId} --json 读取。`,
     `执行完成并验证后，先用 comment add 记录关键改动、验证结果、执行结果和剩余风险，再运行 issue get 读取最新 version，并使用显式 --if-version 和完整 binding（${bindingOptions}）将议题移动到 in_review；成功后更新 ownedVersion。不要省略 binding，不要直接标记为 done。`,
     "若因 version 陈旧发生版本冲突，重新运行 issue get 和 comment list；仅当描述和最新评论未变化且仍绑定当前会话时，用最新 version 重试一次；仍失败则报告并结束。",
   ];

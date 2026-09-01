@@ -84,14 +84,14 @@ test("the automation prompt drives the local claude controller through taskctl",
   assert.match(prompt, /--binding-codex-project-kind "local"/);
   assert.match(prompt, /--binding-codex-host-id "local"/);
   assert.match(prompt, /在本会话内完成实现和验证/);
-  assert.match(prompt, /project readme get local --json/);
-  assert.match(prompt, /readme\.content 非空/);
+  assert.match(prompt, /需要时[^\n]*project readme get local --json/);
+  assert.ok(!prompt.includes("强制要求"));
   assert.ok(!prompt.includes("send_message_to_thread"));
   assert.ok(!prompt.includes("create_thread"));
   assert.ok(!prompt.includes("wait_threads"));
 });
 
-test("the task run prompt makes the controller read the project readme before implementation", () => {
+test("the task run prompt makes the controller aware of the project readme", () => {
   const request = parseTaskboardAutomationHostRequest({
     ...baseRequest,
     operation: "run-task",
@@ -99,8 +99,8 @@ test("the task run prompt makes the controller read the project readme before im
   });
   const prompt = buildTaskboardTaskRunPrompt(request);
   assert.match(prompt, /issue get PPT-42 --json/);
-  assert.match(prompt, /project readme get local --json/);
-  assert.match(prompt, /readme\.content 非空/);
+  assert.match(prompt, /需要时[^\n]*project readme get local --json/);
+  assert.ok(!prompt.includes("强制要求"));
   assert.match(prompt, /--binding-thread-id "\$CLAUDE_THREAD_ID"/);
 });
 
