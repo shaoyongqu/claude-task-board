@@ -696,6 +696,7 @@ function parseTaskPatch(body) {
   assertAllowedKeys(body, new Set([
     "version", "projectId", "title", "description", "status", "priority", "labels", "threadId", "threadBinding",
     "assigneeTarget", "developmentContext", "startDate", "dueDate", "recurrence", "modelProfileId",
+    "reasoningEffort",
   ]));
   const version = parseVersion(body.version);
   const threadId = parseThreadId(body.threadId);
@@ -714,6 +715,9 @@ function parseTaskPatch(body) {
   if (body.recurrence !== undefined) changes.recurrence = parseRecurrence(body.recurrence);
   if (body.modelProfileId !== undefined) {
     changes.modelProfileId = parseOptionalModelProfileId(body.modelProfileId) ?? null;
+  }
+  if (body.reasoningEffort !== undefined) {
+    changes.reasoningEffort = parseTaskReasoningEffort(body.reasoningEffort);
   }
   if (changes.recurrence && body.dueDate === null) {
     throw new ApiError(400, "INVALID_FIELD", "A recurring issue requires 'dueDate'");
@@ -987,6 +991,20 @@ function parseAiThreadPatch(body) {
     throw new ApiError(400, "INVALID_BODY", "PATCH requires at least one thread setting");
   }
   return input;
+}
+
+const TASK_REASONING_EFFORTS = new Set(["low", "medium", "high", "max"]);
+
+function parseTaskReasoningEffort(value) {
+  if (value === null) return null;
+  if (typeof value !== "string" || !TASK_REASONING_EFFORTS.has(value)) {
+    throw new ApiError(
+      400,
+      "INVALID_FIELD",
+      "'reasoningEffort' must be one of low, medium, high, max, or null",
+    );
+  }
+  return value;
 }
 
 function parseOptionalModelProfileId(value) {
@@ -2067,6 +2085,18 @@ export function createTaskboardServer(options = {}) {
     }
     if (!registeredSession) return state;
     return { ...state, running: !registeredSession.endedAt };
+  }
+
+  // Server-side "really executing" for a task: in_progress plus any live
+  // signal for its sessions. Mirrors the card's processing.locked semantics.
+  function taskIsExecuting(task) {
+    if (task.status !== "in_progress") return false;
+    if (task.threadId) {
+      if (automationScheduler.isThreadLive(task.threadId)) return true;
+      const registeredSession = sessionRegistry.get(task.threadId);
+      if (registeredSession && !registeredSession.endedAt) return true;
+    }
+    return database.hasRunningAiChatRunForIssue(task.id);
   }
 
   async function findClaudeSession(threadId) {
@@ -3588,6 +3618,22 @@ export function createTaskboardServer(options = {}) {
           }
           const current = database.getTask(id);
           if (!current) throw new ApiError(404, "TASK_NOT_FOUND", `Task '${id}' does not exist`);
+          // An executing issue must keep the model it started with: reject
+          // model-source changes while its bound session is live or a run of
+          // one of its conversations is in flight. Reasoning effort stays
+          // editable and simply applies to the next turn. Unchanged values
+          // (resent by whole-draft PATCHes) must not trip the lock.
+          if (
+            Object.hasOwn(changes, "modelProfileId")
+            && changes.modelProfileId !== current.modelProfileId
+            && taskIsExecuting(current)
+          ) {
+            throw new ApiError(
+              409,
+              "TASK_MODEL_LOCKED",
+              "议题正在执行中，不能切换模型配置；请先终止执行或等待处理结束",
+            );
+          }
           let jiraChanged = false;
           if (current.source !== "jira" && changes.projectId === JIRA_PROJECT_ID) {
             throw new ApiError(

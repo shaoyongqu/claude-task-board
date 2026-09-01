@@ -266,6 +266,7 @@ function taskFromRow(row) {
     externalUrl: row.external_url ?? null,
     archivedAt: row.archived_at,
     modelProfileId: row.model_profile_id ?? null,
+    reasoningEffort: row.reasoning_effort ?? null,
     version: row.version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -810,6 +811,9 @@ export class TaskboardDatabase {
     const modelProfileColumns = this.database.prepare("PRAGMA table_info(model_profiles)").all();
     if (!modelProfileColumns.some((column) => column.name === "advanced_env")) {
       this.database.exec("ALTER TABLE model_profiles ADD COLUMN advanced_env TEXT");
+    }
+    if (!migratedTaskColumns.some((column) => column.name === "reasoning_effort")) {
+      this.database.exec("ALTER TABLE tasks ADD COLUMN reasoning_effort TEXT");
     }
     this.database.exec(`
       DROP INDEX IF EXISTS tasks_external_source_id;
@@ -1804,6 +1808,19 @@ export class TaskboardDatabase {
     return null;
   }
 
+  // Whether any conversation bound to this issue has a run in flight. Combined
+  // with scheduler liveness this is the server's "really executing" signal.
+  hasRunningAiChatRunForIssue(issueId) {
+    const row = this.database.prepare(`
+      SELECT 1 AS running
+      FROM ai_chat_runs
+      JOIN ai_chat_threads ON ai_chat_threads.id = ai_chat_runs.thread_id
+      WHERE ai_chat_threads.origin_issue_id = ? AND ai_chat_runs.status = 'running'
+      LIMIT 1
+    `).get(issueId);
+    return Boolean(row);
+  }
+
   listAiChatThreads() {
     const rows = this.database.prepare(`
       SELECT * FROM ai_chat_threads
@@ -2350,6 +2367,7 @@ export class TaskboardDatabase {
       startDate: "start_date",
       dueDate: "due_date",
       modelProfileId: "model_profile_id",
+      reasoningEffort: "reasoning_effort",
     };
     const assignments = [];
     const values = [];
@@ -2413,6 +2431,28 @@ export class TaskboardDatabase {
       `).run(...values);
       if (result.changes !== 1) {
         this.#throwMissingOrConflict(id, version);
+      }
+      if (
+        Object.hasOwn(changes, "modelProfileId")
+        && changes.modelProfileId !== current.modelProfileId
+        && current.threadId
+      ) {
+        // The bound conversation snapshots its profile at creation; without
+        // this sync, later turns in it would ignore the issue's new source.
+        this.database.prepare(`
+          UPDATE ai_chat_threads SET model_profile_id = ?, updated_at = ? WHERE id = ?
+        `).run(changes.modelProfileId ?? null, timestamp, current.threadId);
+      }
+      // The thread's reasoning effort is NOT NULL and always concrete, so a
+      // "follow the default" (null) issue selection leaves it untouched.
+      if (
+        changes.reasoningEffort
+        && changes.reasoningEffort !== current.reasoningEffort
+        && current.threadId
+      ) {
+        this.database.prepare(`
+          UPDATE ai_chat_threads SET reasoning_effort = ?, updated_at = ? WHERE id = ?
+        `).run(changes.reasoningEffort, timestamp, current.threadId);
       }
       if (projectChanged) {
         this.database.prepare(`

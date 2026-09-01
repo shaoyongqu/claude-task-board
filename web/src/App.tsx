@@ -663,6 +663,8 @@ function taskToDraft(task: Task): TaskDraft {
     startDate: task.startDate,
     dueDate: task.dueDate,
     recurrence: task.recurrence,
+    modelProfileId: task.modelProfileId,
+    reasoningEffort: task.reasoningEffort,
   };
 }
 
@@ -4013,6 +4015,7 @@ export function App() {
             availableLabels={availableLabels}
             developmentScan={developmentScan}
             developmentScanLoading={developmentScanLoading}
+            modelProfiles={localAiChatAvailable ? modelProfiles : []}
             commentsRevision={commentsRevision}
             attachmentsRevision={attachmentsRevision}
             onCreateLabel={persistProjectLabel}

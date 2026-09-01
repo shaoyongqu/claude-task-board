@@ -453,6 +453,7 @@ export interface Task {
   externalUrl: string | null;
   archivedAt: string | null;
   modelProfileId: string | null;
+  reasoningEffort: string | null;
   relations: TaskRelations;
   version: number;
   createdAt: string;
@@ -550,6 +551,7 @@ export interface TaskDraft {
   dueDate: string | null;
   recurrence: Recurrence | null;
   modelProfileId?: string | null;
+  reasoningEffort?: string | null;
 }
 
 export interface TaskEvent {

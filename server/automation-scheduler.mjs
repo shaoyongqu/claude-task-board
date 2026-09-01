@@ -266,8 +266,13 @@ export class LocalAutomationScheduler {
     }
   }
 
-  #spawnControllerTurn(request, sessionId, prompt) {
-    const modelProfile = this.database.resolveModelProfile(request.modelProfileId ?? null);
+  #spawnControllerTurn(request, sessionId, prompt, overrides = {}) {
+    const modelProfile = overrides.modelProfile !== undefined
+      ? overrides.modelProfile
+      : this.database.resolveModelProfile(request.modelProfileId ?? null);
+    const reasoningEffort = overrides.reasoningEffort !== undefined
+      ? overrides.reasoningEffort
+      : request.reasoningEffort;
     const args = [
       "--print",
       "--output-format",
@@ -282,6 +287,7 @@ export class LocalAutomationScheduler {
       "--session-id",
       sessionId,
     ];
+    if (reasoningEffort) args.push("--effort", reasoningEffort);
     const profileSettings = modelProfileSettingsArg(modelProfile);
     if (profileSettings) args.push("--settings", profileSettings);
     args.push("-");
@@ -334,6 +340,12 @@ export class LocalAutomationScheduler {
       },
       context.actor ?? { type: "user", id: "local-user", name: "本地用户", avatarUrl: null },
     );
+    // A board-triggered execution of one specific issue runs with that
+    // issue's own model selection and effort (falling back to the automation
+    // policy's effort), not the policy's profile: the issue's choice is the
+    // designated model for this run and stays pinned for its whole lifetime.
+    const issueModelProfile = this.database.resolveModelProfile(task.modelProfileId ?? null);
+    const issueReasoningEffort = task.reasoningEffort ?? request.reasoningEffort;
     const run = {
       issueId: request.issueId,
       taskId: task.id,
@@ -350,6 +362,7 @@ export class LocalAutomationScheduler {
         request,
         sessionId,
         buildTaskboardTaskRunPrompt(request),
+        { modelProfile: issueModelProfile, reasoningEffort: issueReasoningEffort },
       );
       run.child = child;
       completion.then(

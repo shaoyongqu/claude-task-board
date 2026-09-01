@@ -27,7 +27,7 @@ import {
   useTaskboardI18n,
   type TaskboardLanguage,
 } from "../i18n";
-import { TASK_PRIORITIES, TASK_STATUSES } from "../types";
+import { MACHINE_MODEL_PROFILE_ID, TASK_PRIORITIES, TASK_STATUSES } from "../types";
 import type {
   ActorIdentity,
   Attachment,
@@ -37,6 +37,7 @@ import type {
   DevelopmentScan,
   IssueRelationOrigin,
   IssueRelationType,
+  ModelProfile,
   Recurrence,
   Task,
   TaskChangeActivity,
@@ -91,12 +92,23 @@ import {
   type RelationMutationResult,
 } from "./IssueRelations";
 import { TaskPropertyPicker } from "./TaskPropertyPicker";
+import { TaskboardIcon } from "./TaskboardIcon";
 import { buildIssueUrl } from "../issueRoute";
 import copyIdIcon from "../assets/figma-taskboard/copy-id.svg";
 import copyLinkIcon from "../assets/figma-taskboard/copy-link.svg";
 import { DescriptionDocument } from "./DescriptionDocument";
 
 type TaskDetailError = string | readonly [string, string];
+
+// Mirrors the model catalog's supported effort ladder and the CLI's --effort.
+const TASK_REASONING_EFFORTS = ["low", "medium", "high", "max"] as const;
+
+const TASK_EFFORT_LABELS: Record<string, readonly [string, string]> = {
+  low: ["轻度", "Low"],
+  medium: ["中", "Medium"],
+  high: ["高", "High"],
+  max: ["最高", "Maximum"],
+};
 
 interface TaskDetailProps {
   task: Task;
@@ -106,6 +118,7 @@ interface TaskDetailProps {
   availableLabels: string[];
   developmentScan: DevelopmentScan;
   developmentScanLoading: boolean;
+  modelProfiles?: ModelProfile[];
   commentsRevision: number;
   attachmentsRevision: number;
   onCreateLabel: (label: string) => Promise<void>;
@@ -377,6 +390,7 @@ export function TaskDetail({
   availableLabels,
   developmentScan,
   developmentScanLoading,
+  modelProfiles,
   commentsRevision,
   attachmentsRevision,
   onCreateLabel,
@@ -404,7 +418,7 @@ export function TaskDetail({
   );
   const [editingDescription, setEditingDescription] = useState(false);
   const [propertyMenu, setPropertyMenu] = useState<
-    "status" | "priority" | "assignee" | "labels" | "development" | "recurrence" | null
+    "status" | "priority" | "assignee" | "labels" | "modelProfile" | "reasoningEffort" | "development" | "recurrence" | null
   >(null);
   const [savingProperty, setSavingProperty] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -1717,6 +1731,66 @@ export function TaskDetail({
                 onChange={(nextLabels) => void saveTask({ labels: nextLabels }, "labels")}
                 onCreateLabel={onCreateLabel}
                 onDeleteLabel={currentTask.source === "jira" ? undefined : onDeleteLabel}
+              />
+            </div>
+            {(modelProfiles?.length ?? 0) > 0 && (
+              <div className="detail-property-row">
+                <span className="detail-property-label">{text("模型配置", "Model profile")}</span>
+                <TaskPropertyPicker
+                  value={currentTask.modelProfileId ?? ""}
+                  options={[
+                    {
+                      value: "",
+                      label: text("看板默认", "Board default"),
+                      icon: <TaskboardIcon name="projectFolder" />,
+                    },
+                    {
+                      value: MACHINE_MODEL_PROFILE_ID,
+                      label: text("Claude Code 全局", "Claude Code global"),
+                      icon: <TaskboardIcon name="projectFolder" />,
+                    },
+                    ...modelProfiles!.map((profile) => ({
+                      value: profile.id,
+                      label: profile.model ? `${profile.name} · ${profile.model}` : profile.name,
+                      icon: <TaskboardIcon name="projectFolder" />,
+                    })),
+                  ]}
+                  open={propertyMenu === "modelProfile"}
+                  disabled={executionLocked || savingProperty === "modelProfile"}
+                  className="detail-property-picker"
+                  triggerClassName="detail-property-trigger"
+                  ariaLabel={text("模型配置", "Model profile")}
+                  title={executionLocked
+                    ? text("执行中不能切换模型，等待处理结束或先终止执行", "Model is locked while this issue is executing")
+                    : undefined}
+                  onOpenChange={(open) => setPropertyMenu(open ? "modelProfile" : null)}
+                  onChange={(value) => void saveTask({ modelProfileId: value || null }, "modelProfile")}
+                />
+              </div>
+            )}
+            <div className="detail-property-row">
+              <span className="detail-property-label">{text("推理强度", "Reasoning effort")}</span>
+              <TaskPropertyPicker
+                value={currentTask.reasoningEffort ?? ""}
+                options={[
+                  {
+                    value: "",
+                    label: text("默认", "Default"),
+                    icon: null,
+                  },
+                  ...TASK_REASONING_EFFORTS.map((effort) => ({
+                    value: effort,
+                    label: TASK_EFFORT_LABELS[effort] ? text(...TASK_EFFORT_LABELS[effort]) : effort,
+                    icon: null,
+                  })),
+                ]}
+                open={propertyMenu === "reasoningEffort"}
+                disabled={savingProperty === "reasoningEffort"}
+                className="detail-property-picker"
+                triggerClassName="detail-property-trigger"
+                ariaLabel={text("推理强度", "Reasoning effort")}
+                onOpenChange={(open) => setPropertyMenu(open ? "reasoningEffort" : null)}
+                onChange={(value) => void saveTask({ reasoningEffort: value || null }, "reasoningEffort")}
               />
             </div>
             <div className="detail-property-row development-property">
