@@ -12459,6 +12459,70 @@ kbd {
   box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
+.model-profiles-advanced {
+  display: grid;
+  gap: 6px;
+}
+
+.model-profiles-advanced-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-self: start;
+  height: 26px;
+  padding: 0 8px;
+  border: var(--border-hairline) solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.model-profiles-advanced-toggle:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.model-profiles-advanced-chevron {
+  font-size: 9px;
+}
+
+.model-profiles-advanced-badge,
+.model-profiles-advanced-item-badge {
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10px;
+}
+
+.model-profiles-advanced-input {
+  width: 100%;
+  padding: 8px 9px;
+  border: var(--border-hairline) solid var(--border-strong);
+  border-radius: 6px;
+  outline: none;
+  background: var(--surface);
+  color: var(--text-primary);
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.model-profiles-advanced-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.model-profiles-advanced-hint {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
 .model-profiles-form-actions {
   display: flex;
   justify-content: flex-end;

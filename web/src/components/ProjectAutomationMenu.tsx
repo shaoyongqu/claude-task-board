@@ -5,7 +5,7 @@ import { ProjectIcon, RecurrenceIcon } from "./SemanticIcons";
 import { TaskPropertyPicker } from "./TaskPropertyPicker";
 import { TaskboardIcon } from "./TaskboardIcon";
 import { useTaskboardI18n } from "../i18n";
-import type { AiChatModel, ModelProfile } from "../types";
+import { MACHINE_MODEL_PROFILE_ID, type AiChatModel, type ModelProfile } from "../types";
 
 type AutomationStatus = "ACTIVE" | "PAUSED";
 type AutomationQuotaState = "available" | "blocked" | "unknown" | "unavailable";
@@ -263,7 +263,12 @@ export function ProjectAutomationMenu({
             options={[
               {
                 value: "",
-                label: text("跟随全局默认", "Use global default"),
+                label: text("跟随看板默认", "Use board default"),
+                icon: <TaskboardIcon name="projectFolder" />,
+              },
+              {
+                value: MACHINE_MODEL_PROFILE_ID,
+                label: text("遵循 Claude Code 全局", "Follow Claude Code global"),
                 icon: <TaskboardIcon name="projectFolder" />,
               },
               ...modelProfiles.map((profile) => ({

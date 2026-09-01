@@ -424,6 +424,11 @@ function aiChatThreadFromRow(row) {
   };
 }
 
+// Sentinel model source meaning "follow the machine's current Claude Code
+// configuration" (whatever ~/.claude/settings.json holds right now) instead of
+// the board's global default profile.
+export const MACHINE_MODEL_PROFILE_ID = "__machine__";
+
 function modelProfileFromRow(row) {
   return {
     id: row.id,
@@ -433,10 +438,27 @@ function modelProfileFromRow(row) {
     authToken: row.auth_token,
     model: row.model,
     smallFastModel: row.small_fast_model,
+    advancedEnv: parseAdvancedEnv(row.advanced_env),
     description: row.description,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function parseAdvancedEnv(raw) {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function advancedEnvColumn(advancedEnv) {
+  if (!advancedEnv || typeof advancedEnv !== "object") return null;
+  const entries = Object.entries(advancedEnv).filter(([, value]) => typeof value === "string");
+  return entries.length > 0 ? JSON.stringify(Object.fromEntries(entries)) : null;
 }
 
 function aiChatEventFromRow(row) {
@@ -627,6 +649,7 @@ export class TaskboardDatabase {
         auth_token TEXT,
         model TEXT NOT NULL DEFAULT '',
         small_fast_model TEXT,
+        advanced_env TEXT,
         description TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -783,6 +806,10 @@ export class TaskboardDatabase {
     const threadColumns = this.database.prepare("PRAGMA table_info(ai_chat_threads)").all();
     if (!threadColumns.some((column) => column.name === "model_profile_id")) {
       this.database.exec("ALTER TABLE ai_chat_threads ADD COLUMN model_profile_id TEXT");
+    }
+    const modelProfileColumns = this.database.prepare("PRAGMA table_info(model_profiles)").all();
+    if (!modelProfileColumns.some((column) => column.name === "advanced_env")) {
+      this.database.exec("ALTER TABLE model_profiles ADD COLUMN advanced_env TEXT");
     }
     this.database.exec(`
       DROP INDEX IF EXISTS tasks_external_source_id;
@@ -1673,8 +1700,8 @@ export class TaskboardDatabase {
     this.database.prepare(`
       INSERT INTO model_profiles (
         id, name, provider, base_url, auth_token, model, small_fast_model,
-        description, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        advanced_env, description, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       input.name,
@@ -1683,6 +1710,7 @@ export class TaskboardDatabase {
       input.authToken,
       input.model,
       input.smallFastModel,
+      advancedEnvColumn(input.advancedEnv),
       input.description,
       timestamp,
       timestamp,
@@ -1702,6 +1730,7 @@ export class TaskboardDatabase {
       authToken: "auth_token",
       model: "model",
       smallFastModel: "small_fast_model",
+      advancedEnv: "advanced_env",
       description: "description",
     };
     const assignments = [];
@@ -1709,7 +1738,7 @@ export class TaskboardDatabase {
     for (const [key, column] of Object.entries(columns)) {
       if (!Object.hasOwn(changes, key)) continue;
       assignments.push(`${column} = ?`);
-      values.push(changes[key]);
+      values.push(key === "advancedEnv" ? advancedEnvColumn(changes[key]) : changes[key]);
     }
     if (assignments.length === 0) return current;
     assignments.push("updated_at = ?");
@@ -1761,8 +1790,10 @@ export class TaskboardDatabase {
 
   // Priority: an explicit profile id (issue selection, automation selection),
   // then the global default profile. Unknown ids fall through to the default so
-  // deleting a profile never breaks issue or automation turns.
+  // deleting a profile never breaks issue or automation turns. The machine
+  // sentinel explicitly opts out of both and follows ~/.claude/settings.json.
   resolveModelProfile(preferredId) {
+    if (preferredId === MACHINE_MODEL_PROFILE_ID) return null;
     const preferred = typeof preferredId === "string" && preferredId ? this.getModelProfile(preferredId) : null;
     if (preferred) return preferred;
     const defaultId = this.getDefaultModelProfileId();

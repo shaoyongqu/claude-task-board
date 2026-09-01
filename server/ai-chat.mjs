@@ -15,7 +15,6 @@ import {
   buildClaudeArgs,
   buildClaudePrompt,
   modelProfileEnvironment,
-  modelProfileSettingsArg,
   normalizeClaudeEvent,
   spawnClaudeTurn,
 } from "./ai-chat-process.mjs";
@@ -359,11 +358,15 @@ export class AiChatService {
       const resumingThreadId = thread.claudeThreadId;
       const turnSessionId = resumingThreadId ?? randomUUID();
       const modelProfile = this.database.resolveModelProfile(thread.modelProfileId);
-      // A profile with an explicit model drives Claude Code through
-      // ANTHROPIC_MODEL, so the --model alias flag must not override it.
-      const argThread = modelProfile?.model ? { ...thread, model: "default" } : thread;
+      const profileEnv = modelProfileEnvironment(modelProfile);
+      // A profile that pins ANTHROPIC_MODEL (simple field or advanced JSON)
+      // drives Claude Code through the environment, so the --model alias flag
+      // must not override it.
+      const argThread = profileEnv.ANTHROPIC_MODEL ? { ...thread, model: "default" } : thread;
       const args = buildClaudeArgs(argThread, resolved.addDirectories, turnSessionId);
-      const profileSettings = modelProfileSettingsArg(modelProfile);
+      const profileSettings = Object.keys(profileEnv).length > 0
+        ? JSON.stringify({ env: profileEnv })
+        : null;
       if (profileSettings) args.splice(args.length - 1, 0, "--settings", profileSettings);
       const prompt = buildClaudePrompt(
         thread,
@@ -423,7 +426,7 @@ export class AiChatService {
         CLAUDE_THREAD_ID: turnSessionId,
       };
       const extraEnv = {
-        ...modelProfileEnvironment(modelProfile),
+        ...profileEnv,
         ...(this.boardBaseUrl ? { CLAUDE_TASKBOARD_URL: this.boardBaseUrl } : {}),
       };
       const { child, completion } = spawnClaudeTurn({

@@ -8,6 +8,7 @@ import {
   type TaskboardLanguage,
 } from "../i18n";
 import {
+  MACHINE_MODEL_PROFILE_ID,
   TASK_PRIORITIES,
   TASK_STATUSES,
   type ActorIdentity,
@@ -680,7 +681,12 @@ export function TaskEditor({
                 options={[
                   {
                     value: "",
-                    label: text("模型配置 · 默认", "Model · default"),
+                    label: text("模型配置 · 看板默认", "Model · board default"),
+                    icon: <TaskboardIcon name="projectFolder" />,
+                  },
+                  {
+                    value: MACHINE_MODEL_PROFILE_ID,
+                    label: text("模型配置 · Claude Code 全局", "Model · Claude Code global"),
                     icon: <TaskboardIcon name="projectFolder" />,
                   },
                   ...modelProfiles!.map((profile) => ({

@@ -25,6 +25,7 @@ interface ProfileForm {
   authToken: string;
   model: string;
   smallFastModel: string;
+  advancedEnv: Record<string, string>;
   description: string;
 }
 
@@ -35,8 +36,20 @@ const EMPTY_FORM: ProfileForm = {
   authToken: "",
   model: "",
   smallFastModel: "",
+  advancedEnv: {},
   description: "",
 };
+
+// Env keys owned by the simple fields above; they sync bidirectionally with
+// the advanced JSON editor, everything else is stored as an advanced entry.
+const KNOWN_ENV_KEYS = [
+  "ANTHROPIC_BASE_URL",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_MODEL",
+  "ANTHROPIC_SMALL_FAST_MODEL",
+] as const;
+
+const ENV_KEY_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 
 function formFromProfile(profile: ModelProfile): ProfileForm {
   return {
@@ -46,7 +59,86 @@ function formFromProfile(profile: ModelProfile): ProfileForm {
     authToken: profile.authToken ?? "",
     model: profile.model,
     smallFastModel: profile.smallFastModel ?? "",
+    advancedEnv: { ...(profile.advancedEnv ?? {}) },
     description: profile.description ?? "",
+  };
+}
+
+function advancedJsonFromForm(form: ProfileForm): string {
+  const env: Record<string, string> = {};
+  if (form.baseUrl.trim()) env.ANTHROPIC_BASE_URL = form.baseUrl.trim();
+  if (form.authToken.trim()) env.ANTHROPIC_AUTH_TOKEN = form.authToken.trim();
+  if (form.model.trim()) env.ANTHROPIC_MODEL = form.model.trim();
+  if (form.smallFastModel.trim()) env.ANTHROPIC_SMALL_FAST_MODEL = form.smallFastModel.trim();
+  Object.assign(env, form.advancedEnv);
+  const ordered: Record<string, string> = {};
+  for (const key of KNOWN_ENV_KEYS) {
+    if (key in env) ordered[key] = env[key];
+  }
+  for (const key of Object.keys(env).sort()) {
+    if (!(key in ordered)) ordered[key] = env[key];
+  }
+  return JSON.stringify(ordered, null, 2);
+}
+
+// Parses the advanced editor text back into the form. Returns null when the
+// text is not valid yet, together with a localized reason.
+function applyAdvancedJson(
+  raw: string,
+  form: ProfileForm,
+  text: (zh: string, en: string) => string,
+): { form: ProfileForm; error: string | null } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (caught) {
+    return {
+      form,
+      error: text(
+        `JSON 格式错误：${caught instanceof Error ? caught.message : String(caught)}`,
+        `Invalid JSON: ${caught instanceof Error ? caught.message : String(caught)}`,
+      ),
+    };
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return {
+      form,
+      error: text("内容必须是一个 JSON 对象，如 {\"ANTHROPIC_MODEL\": \"...\"}", "Expected a JSON object like {\"ANTHROPIC_MODEL\": \"...\"}"),
+    };
+  }
+  const advancedEnv: Record<string, string> = {};
+  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+    if (!ENV_KEY_PATTERN.test(key) || key.length > 128) {
+      return {
+        form,
+        error: text(
+          `键名 "${key}" 不是合法的环境变量名（需为大写字母/数字/下划线，如 ANTHROPIC_MODEL）`,
+          `Key "${key}" is not a valid environment variable name (uppercase letters, digits, underscore, e.g. ANTHROPIC_MODEL)`,
+        ),
+      }
+    }
+    if (typeof value !== "string") {
+      return {
+        form,
+        error: text(
+          `键 "${key}" 的值必须是字符串`,
+          `Value of "${key}" must be a string`,
+        ),
+      };
+    }
+    if (!(KNOWN_ENV_KEYS as readonly string[]).includes(key)) advancedEnv[key] = value;
+  }
+  const known = parsed as Record<string, string>;
+  return {
+    form: {
+      ...form,
+      baseUrl: known.ANTHROPIC_BASE_URL ?? "",
+      authToken: known.ANTHROPIC_AUTH_TOKEN ?? "",
+      model: known.ANTHROPIC_MODEL ?? "",
+      smallFastModel: known.ANTHROPIC_SMALL_FAST_MODEL ?? "",
+      advancedEnv,
+    },
+    error: null,
   };
 }
 
@@ -58,6 +150,7 @@ function inputFromForm(form: ProfileForm): ModelProfileInput {
     authToken: form.authToken.trim(),
     model: form.model.trim(),
     smallFastModel: form.smallFastModel.trim(),
+    advancedEnv: form.advancedEnv,
     description: form.description.trim(),
   };
 }
@@ -72,6 +165,9 @@ export function ModelProfilesDialog({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [form, setForm] = useState<ProfileForm>(EMPTY_FORM);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [advancedJson, setAdvancedJson] = useState("");
+  const [advancedError, setAdvancedError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -95,6 +191,9 @@ export function ModelProfilesDialog({
     setEditingId(null);
     setForm(EMPTY_FORM);
     setFormOpen(true);
+    setAdvancedOpen(false);
+    setAdvancedJson("");
+    setAdvancedError(null);
     setError(null);
   }
 
@@ -102,7 +201,35 @@ export function ModelProfilesDialog({
     setEditingId(profile.id);
     setForm(formFromProfile(profile));
     setFormOpen(true);
+    setAdvancedOpen(false);
+    setAdvancedJson("");
+    setAdvancedError(null);
     setError(null);
+  }
+
+  // Editing a simple field while the advanced editor is open keeps the JSON in
+  // sync; while it holds a parse error the manual text wins until it is valid.
+  function patchSimpleFields(patch: Partial<ProfileForm>) {
+    const next = { ...form, ...patch };
+    setForm(next);
+    if (advancedOpen && advancedError === null) setAdvancedJson(advancedJsonFromForm(next));
+  }
+
+  function changeAdvancedJson(raw: string) {
+    setAdvancedJson(raw);
+    const result = applyAdvancedJson(raw, form, text);
+    setAdvancedError(result.error);
+    if (!result.error) setForm(result.form);
+  }
+
+  function toggleAdvanced() {
+    if (advancedOpen) {
+      setAdvancedOpen(false);
+      return;
+    }
+    setAdvancedJson(advancedJsonFromForm(form));
+    setAdvancedError(null);
+    setAdvancedOpen(true);
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -110,6 +237,10 @@ export function ModelProfilesDialog({
     const input = inputFromForm(form);
     if (!input.name) {
       setError(text("请为模型配置填写一个名称。", "Enter a name for the model profile."));
+      return;
+    }
+    if (advancedOpen && advancedError) {
+      setError(advancedError);
       return;
     }
     setSaving(true);
@@ -120,6 +251,9 @@ export function ModelProfilesDialog({
       setFormOpen(false);
       setEditingId(null);
       setForm(EMPTY_FORM);
+      setAdvancedOpen(false);
+      setAdvancedJson("");
+      setAdvancedError(null);
       onChanged();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -210,6 +344,11 @@ export function ModelProfilesDialog({
                       {text("全局默认", "Default")}
                     </span>
                   )}
+                  {Object.keys(profile.advancedEnv ?? {}).length > 0 && (
+                    <span className="model-profiles-default-badge model-profiles-advanced-item-badge">
+                      {text("高级", "Advanced")}
+                    </span>
+                  )}
                 </div>
                 <p
                   className="model-profiles-item-meta"
@@ -290,7 +429,7 @@ export function ModelProfilesDialog({
                   maxLength={256}
                   placeholder={text("如：kimi-k2-0905-preview", "e.g. kimi-k2-0905-preview")}
                   value={form.model}
-                  onChange={(event) => setForm({ ...form, model: event.target.value })}
+                  onChange={(event) => patchSimpleFields({ model: event.target.value })}
                 />
               </label>
               <label>
@@ -299,7 +438,7 @@ export function ModelProfilesDialog({
                   maxLength={256}
                   placeholder={text("可选，留空跟随主模型", "optional")}
                   value={form.smallFastModel}
-                  onChange={(event) => setForm({ ...form, smallFastModel: event.target.value })}
+                  onChange={(event) => patchSimpleFields({ smallFastModel: event.target.value })}
                 />
               </label>
             </div>
@@ -310,7 +449,7 @@ export function ModelProfilesDialog({
                 maxLength={2048}
                 placeholder="https://api.moonshot.cn/anthropic"
                 value={form.baseUrl}
-                onChange={(event) => setForm({ ...form, baseUrl: event.target.value })}
+                onChange={(event) => patchSimpleFields({ baseUrl: event.target.value })}
               />
             </label>
             <label>
@@ -321,9 +460,47 @@ export function ModelProfilesDialog({
                 maxLength={4096}
                 placeholder={editingId ? text("留空则保持不变", "Leave blank to keep unchanged") : ""}
                 value={form.authToken}
-                onChange={(event) => setForm({ ...form, authToken: event.target.value })}
+                onChange={(event) => patchSimpleFields({ authToken: event.target.value })}
               />
             </label>
+            <div className="model-profiles-advanced">
+              <button
+                type="button"
+                className="model-profiles-advanced-toggle"
+                onClick={toggleAdvanced}
+                disabled={saving}
+                aria-expanded={advancedOpen}
+              >
+                <span className="model-profiles-advanced-chevron" aria-hidden="true">
+                  {advancedOpen ? "▾" : "▸"}
+                </span>
+                {text("高级选项（环境变量 JSON）", "Advanced (env JSON)")}
+                {Object.keys(form.advancedEnv).length > 0 && (
+                  <span className="model-profiles-advanced-badge">
+                    {text("已含高级配置", "advanced")}
+                  </span>
+                )}
+              </button>
+              {advancedOpen && (
+                <>
+                  <textarea
+                    className="model-profiles-advanced-input"
+                    spellCheck={false}
+                    rows={10}
+                    value={advancedJson}
+                    onChange={(event) => changeAdvancedJson(event.target.value)}
+                    placeholder={'{\n  "ANTHROPIC_BASE_URL": "https://...",\n  "ANTHROPIC_AUTH_TOKEN": "sk-...",\n  "ANTHROPIC_MODEL": "glm-4.7",\n  "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7-air"\n}'}
+                  />
+                  <p className="model-profiles-advanced-hint">
+                    {text(
+                      "完整环境变量 JSON，键须为大写环境变量名，可直接粘贴 ccswitch 等工具的 env 配置。ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_MODEL / ANTHROPIC_SMALL_FAST_MODEL 会同步到上方简单字段，其余键作为高级配置原样注入会话。",
+                      "Full environment variable JSON with uppercase env keys; paste an env block from ccswitch-style tools. ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_MODEL / ANTHROPIC_SMALL_FAST_MODEL sync with the simple fields above; every other key is injected into sessions as an advanced entry.",
+                    )}
+                  </p>
+                  {advancedError && <p className="model-profiles-error" role="alert">{advancedError}</p>}
+                </>
+              )}
+            </div>
             <label>
               <span>{text("描述", "Description")}</span>
               <input

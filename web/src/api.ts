@@ -273,6 +273,7 @@ export interface ModelProfileInput {
   authToken?: string | null;
   model?: string;
   smallFastModel?: string | null;
+  advancedEnv?: Record<string, string> | null;
   description?: string | null;
 }
 

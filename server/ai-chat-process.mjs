@@ -284,6 +284,9 @@ export function modelProfileEnvironment(profile) {
     env.ANTHROPIC_SMALL_FAST_MODEL = profile.smallFastModel;
     env.ANTHROPIC_DEFAULT_HAIKU_MODEL = profile.smallFastModel;
   }
+  // Advanced JSON entries are the most specific configuration, so they win
+  // over everything derived from the simple fields.
+  if (profile.advancedEnv) Object.assign(env, profile.advancedEnv);
   return env;
 }
 

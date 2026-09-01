@@ -50,7 +50,7 @@ import {
   createCloudProxy,
   isLocalCompanionRoute,
 } from "./cloud-proxy.mjs";
-import { ApiError, TaskboardDatabase } from "./database.mjs";
+import { ApiError, MACHINE_MODEL_PROFILE_ID, TaskboardDatabase } from "./database.mjs";
 import { createJiraConfigStore } from "./jira-config.mjs";
 import { createJiraIntegration } from "./jira-integration.mjs";
 import { ProjectSummaryService } from "./project-summary.mjs";
@@ -992,6 +992,7 @@ function parseAiThreadPatch(body) {
 function parseOptionalModelProfileId(value) {
   if (value === undefined) return undefined;
   if (value === null) return null;
+  if (value === MACHINE_MODEL_PROFILE_ID) return value;
   if (typeof value !== "string" || !/^[a-z0-9][a-z0-9._-]{0,127}$/i.test(value)) {
     throw new ApiError(400, "INVALID_FIELD", "'modelProfileId' must be a model profile id or null");
   }
@@ -1035,8 +1036,39 @@ const MODEL_PROFILE_KEYS = new Set([
   "authToken",
   "model",
   "smallFastModel",
+  "advancedEnv",
   "description",
 ]);
+
+const ENV_KEY_PATTERN = /^[A-Z][A-Z0-9_]*$/;
+
+function parseModelProfileAdvancedEnv(value) {
+  if (value === undefined || value === null) return undefined;
+  assertPlainObject(value);
+  const entries = Object.entries(value);
+  if (entries.length > 32) {
+    throw new ApiError(400, "INVALID_FIELD", "'advancedEnv' must contain at most 32 entries");
+  }
+  const env = {};
+  for (const [key, entryValue] of entries) {
+    if (!ENV_KEY_PATTERN.test(key) || key.length > 128) {
+      throw new ApiError(
+        400,
+        "INVALID_FIELD",
+        `'advancedEnv' keys must be environment variable names like ANTHROPIC_MODEL (got '${key}')`,
+      );
+    }
+    if (typeof entryValue !== "string" || entryValue.length > 4096) {
+      throw new ApiError(
+        400,
+        "INVALID_FIELD",
+        `'advancedEnv.${key}' must be a string of at most 4096 characters`,
+      );
+    }
+    env[key] = entryValue;
+  }
+  return env;
+}
 
 function parseModelProfileFields(body, { partial }) {
   assertPlainObject(body);
@@ -1048,12 +1080,16 @@ function parseModelProfileFields(body, { partial }) {
     "authToken",
     "model",
     "smallFastModel",
+    "advancedEnv",
     "description",
   ];
   const input = {};
   for (const field of fields) {
     if (partial && !Object.hasOwn(body, field)) continue;
     switch (field) {
+      case "advancedEnv":
+        input.advancedEnv = parseModelProfileAdvancedEnv(body.advancedEnv);
+        break;
       case "baseUrl":
         input.baseUrl = parseModelProfileUrl(body.baseUrl, "baseUrl") || null;
         break;

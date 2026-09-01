@@ -262,6 +262,10 @@ export interface AiChatCatalog {
   sandboxes: string[];
 }
 
+// Mirrors server/database.mjs MACHINE_MODEL_PROFILE_ID: selecting this source
+// makes sessions follow the machine's current Claude Code configuration.
+export const MACHINE_MODEL_PROFILE_ID = "__machine__";
+
 export interface ModelProfile {
   id: string;
   name: string;
@@ -270,6 +274,7 @@ export interface ModelProfile {
   authToken: string | null;
   model: string;
   smallFastModel: string | null;
+  advancedEnv: Record<string, string>;
   description: string | null;
   createdAt: string;
   updatedAt: string;
