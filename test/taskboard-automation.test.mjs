@@ -10,6 +10,7 @@ import {
   buildTaskboardAutomationName,
   buildTaskboardAutomationPrompt,
   buildTaskboardAutomationSpec,
+  buildTaskboardTaskRunPrompt,
   parseTaskboardAutomationHostRequest,
   taskboardAutomationPolicyOperation,
 } from "../shared/taskboard-automation.mjs";
@@ -83,9 +84,24 @@ test("the automation prompt drives the local claude controller through taskctl",
   assert.match(prompt, /--binding-codex-project-kind "local"/);
   assert.match(prompt, /--binding-codex-host-id "local"/);
   assert.match(prompt, /在本会话内完成实现和验证/);
+  assert.match(prompt, /project readme get local --json/);
+  assert.match(prompt, /readme\.content 非空/);
   assert.ok(!prompt.includes("send_message_to_thread"));
   assert.ok(!prompt.includes("create_thread"));
   assert.ok(!prompt.includes("wait_threads"));
+});
+
+test("the task run prompt makes the controller read the project readme before implementation", () => {
+  const request = parseTaskboardAutomationHostRequest({
+    ...baseRequest,
+    operation: "run-task",
+    issueId: "PPT-42",
+  });
+  const prompt = buildTaskboardTaskRunPrompt(request);
+  assert.match(prompt, /issue get PPT-42 --json/);
+  assert.match(prompt, /project readme get local --json/);
+  assert.match(prompt, /readme\.content 非空/);
+  assert.match(prompt, /--binding-thread-id "\$CLAUDE_THREAD_ID"/);
 });
 
 test("automation names and specs stay stable", () => {
