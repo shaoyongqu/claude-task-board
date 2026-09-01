@@ -3117,12 +3117,16 @@ export class TaskboardDatabase {
     task.relations = {
       // The parent summary carries the parent's description so agents that
       // claim a sub-issue perceive the parent's requirement content from
-      // `issue get` alone; other relation summaries stay title-only.
+      // `issue get` alone; `related` summaries carry their descriptions for
+      // the same reason. Other relation summaries stay title-only.
       parent: parent ? { ...taskRelationSummaryFromRow(parent), description: parent.description } : null,
       subIssues: subIssues.map(taskRelationSummaryFromRow),
       blockedBy: blockedBy.map(taskRelationSummaryFromRow),
       blocks: blocks.map(taskRelationSummaryFromRow),
-      related: related.map(taskRelationSummaryFromRow),
+      related: related.map((relatedRow) => ({
+        ...taskRelationSummaryFromRow(relatedRow),
+        description: relatedRow.description,
+      })),
     };
     return task;
   }

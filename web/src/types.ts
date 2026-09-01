@@ -392,7 +392,7 @@ export interface TaskRelationSummary {
   externalKey?: string | null;
   projectId: string;
   title: string;
-  /** Present on parent summaries so sub-issue agents perceive parent content. */
+  /** Present on parent and related summaries so claiming agents perceive their content. */
   description?: string | null;
   status: TaskStatus;
   priority: TaskPriority;

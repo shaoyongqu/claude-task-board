@@ -958,7 +958,7 @@ test("issues support parent, sub-issue, blocking, and related issue relationship
   const child = await createIssue("Child issue", "done");
   const grandchild = await createIssue("Grandchild issue", "canceled");
   const blocker = await createIssue("Blocking issue", "in_progress");
-  const related = await createIssue("Related issue");
+  const related = await createIssue("Related issue", "todo", "local", "Related requirement context");
 
   const parentAdded = await mutateRelation("POST", child, "parent", parent);
   assert.equal(parentAdded.response.status, 200);
@@ -1001,6 +1001,10 @@ test("issues support parent, sub-issue, blocking, and related issue relationship
   const relatedAdded = await mutateRelation("POST", await latest(parent.id), "related", related);
   assert.equal(relatedAdded.response.status, 200);
   assert.deepEqual(relatedAdded.body.task.relations.related.map((issue) => issue.id), [related.id]);
+  // Related summaries carry their descriptions so claiming agents perceive
+  // associated issue content from issue get alone.
+  assert.equal(relatedAdded.body.task.relations.related[0].description, "Related requirement context");
+  assert.equal((await latest(related.id)).relations.related[0].description, "Parent requirement context");
   assert.deepEqual((await latest(related.id)).relations.related.map((issue) => issue.id), [parent.id]);
 
   const stale = await mutateRelation(
