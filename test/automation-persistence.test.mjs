@@ -31,7 +31,11 @@ test("enabled automations persist across scheduler restarts", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "automation-persist-"));
   const persistPath = path.join(directory, "automation-configs.json");
   // Mock database with one todo so apply-policy keeps the automation active.
-  const database = { listTasks: () => [{ id: "t1", identifier: "LOCAL-1" }], listProjects: () => [] };
+  const database = {
+    listTasks: () => [{ id: "t1", identifier: "LOCAL-1" }],
+    listProjects: () => [],
+    interruptRunningScheduleRuns: () => 0,
+  };
 
   const first = new LocalAutomationScheduler({
     database,
@@ -68,7 +72,11 @@ test("enabled automations persist across scheduler restarts", async () => {
 test("paused automations restore as paused without timers", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "automation-pause-"));
   const persistPath = path.join(directory, "automation-configs.json");
-  const database = { listTasks: () => [], listProjects: () => [] };
+  const database = {
+    listTasks: () => [],
+    listProjects: () => [],
+    interruptRunningScheduleRuns: () => 0,
+  };
 
   const first = new LocalAutomationScheduler({
     database,

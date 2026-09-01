@@ -1,6 +1,7 @@
 import {
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent,
@@ -15,6 +16,7 @@ import {
   getTask,
   listAttachments,
   listComments,
+  listScheduleRuns,
   listTaskActivities,
   resolveTaskboardUrl,
   uploadAttachment,
@@ -39,6 +41,8 @@ import type {
   IssueRelationType,
   ModelProfile,
   Recurrence,
+  Schedule,
+  ScheduleRun,
   Task,
   TaskChangeActivity,
   TaskDraft,
@@ -55,6 +59,8 @@ import { ActorAvatar } from "./ActorAvatar";
 import { STATUS_DETAILS } from "./BoardColumn";
 import { LabelPicker } from "./LabelPicker";
 import { LinearIcon } from "./LinearIcon";
+import { ScheduleEditor } from "./ScheduleEditor";
+import { describeSchedule, scheduleIsPeriodic } from "../schedule";
 import {
   AttachmentIcon,
   BlockingRelationIcon,
@@ -230,6 +236,7 @@ const ACTIVITY_FIELD_LABELS: Record<string, readonly [string, string]> = {
   startDate: ["开始日期", "start date"],
   dueDate: ["截止日期", "due date"],
   recurrence: ["重复", "recurrence"],
+  schedule: ["定时执行", "schedule"],
   archivedAt: ["归档状态", "archive status"],
   relation: ["关系", "relation"],
 };
@@ -289,6 +296,9 @@ function activityValue(
       `Every ${recurrence.interval === 1 ? "" : `${recurrence.interval} `}${englishUnit}${recurrence.interval === 1 ? "" : "s"}`,
     );
   }
+  if (field === "schedule" && typeof value === "object") {
+    return describeSchedule(value as Schedule, text);
+  }
   if (field === "relation" && typeof value === "object") {
     const relation = value as {
       type: IssueRelationType;
@@ -330,6 +340,7 @@ function ActivityChangeIcon({ field, before, after }: {
   if (field === "startDate") return <DueDateIcon color="currentColor" size={14} />;
   if (field === "dueDate") return <DueDateIcon color="currentColor" size={14} />;
   if (field === "recurrence") return <RecurrenceIcon color="currentColor" size={14} />;
+  if (field === "schedule") return <RecurrenceIcon color="currentColor" size={14} />;
   if (field === "archivedAt") return <DeleteIcon color="currentColor" size={14} />;
   return <EditIcon color="currentColor" size={14} />;
 }
@@ -418,13 +429,15 @@ export function TaskDetail({
   );
   const [editingDescription, setEditingDescription] = useState(false);
   const [propertyMenu, setPropertyMenu] = useState<
-    "status" | "priority" | "assignee" | "labels" | "modelProfile" | "reasoningEffort" | "development" | "recurrence" | null
+    "status" | "priority" | "assignee" | "labels" | "modelProfile" | "reasoningEffort" | "development" | "recurrence" | "schedule" | null
   >(null);
+  const schedulePopoverRef = useRef<HTMLDivElement | null>(null);
   const [savingProperty, setSavingProperty] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [attachmentsError, setAttachmentsError] = useState<TaskDetailError | null>(null);
   const [comments, setComments] = useState<Comment[]>([]);
   const [taskActivities, setTaskActivities] = useState<TaskChangeActivity[]>([]);
+  const [scheduleRunList, setScheduleRunList] = useState<ScheduleRun[]>([]);
   const [commentsLoading, setCommentsLoading] = useState(true);
   const [commentsError, setCommentsError] = useState<TaskDetailError | null>(null);
   const [commentSegments, setCommentSegments] = useState<InlineMediaSegment[]>(
@@ -578,6 +591,40 @@ export function TaskDetail({
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
   }, []);
+
+  useEffect(() => {
+    if (propertyMenu !== "schedule") return;
+    function closeSchedulePopover(event: PointerEvent) {
+      if (!schedulePopoverRef.current?.contains(event.target as Node)) setPropertyMenu(null);
+    }
+    document.addEventListener("pointerdown", closeSchedulePopover);
+    return () => document.removeEventListener("pointerdown", closeSchedulePopover);
+  }, [propertyMenu]);
+
+  // Execution rounds reload whenever the summary on the task payload changes
+  // (a round started, finished, or the issue moved).
+  const runTotal = currentTask.scheduleRuns?.total ?? 0;
+  const runningRunId = currentTask.scheduleRuns?.current?.id ?? null;
+  const latestRunFinishedAt = currentTask.scheduleRuns?.latest?.finishedAt ?? null;
+  useEffect(() => {
+    if (runTotal === 0 && runningRunId === null) {
+      setScheduleRunList([]);
+      return;
+    }
+    const controller = new AbortController();
+    listScheduleRuns(currentTask.id, controller.signal)
+      .then((runs) => setScheduleRunList(runs))
+      .catch(() => {});
+    return () => controller.abort();
+  }, [currentTask.id, runTotal, runningRunId, latestRunFinishedAt]);
+
+  const runByThreadId = useMemo(() => {
+    const map = new Map<string, ScheduleRun>();
+    for (const run of scheduleRunList) {
+      if (run.threadId) map.set(run.threadId, run);
+    }
+    return map;
+  }, [scheduleRunList]);
 
   useEffect(() => {
     if (!activeMenuId) return;
@@ -1315,6 +1362,14 @@ export function TaskDetail({
                           }}
                         />
                         <strong>{comment.authorName}</strong>
+                        {comment.threadId && runByThreadId.has(comment.threadId) && (
+                          <span className="comment-run-badge">
+                            {text(
+                              `第 ${runByThreadId.get(comment.threadId)!.sequence} 轮`,
+                              `Round ${runByThreadId.get(comment.threadId)!.sequence}`,
+                            )}
+                          </span>
+                        )}
                         <time title={exactTime(comment.createdAt, locale)}>{relativeTime(comment.createdAt, locale)}</time>
                         {comment.version > 1 && (
                           <span
@@ -1853,7 +1908,9 @@ export function TaskDetail({
                 disabled={savingProperty === "dueDate"}
                 onChange={(event) => void saveTask({
                   dueDate: event.target.value || null,
-                  ...(event.target.value ? {} : { recurrence: null }),
+                  ...(event.target.value
+                    ? {}
+                    : { recurrence: null, ...(scheduleIsPeriodic(currentTask.schedule) ? { schedule: null } : {}) }),
                 }, "dueDate")}
               />
             </label>
@@ -1889,6 +1946,79 @@ export function TaskDetail({
                 }}
               />
             </div>
+            <div className="detail-property-row schedule-property" ref={schedulePopoverRef}>
+              <span className="detail-property-icon" aria-hidden="true"><RecurrenceIcon color="currentColor" size={14} /></span>
+              <span className="detail-property-label">{text("定时执行", "Schedule")}</span>
+              <button
+                type="button"
+                className="detail-property-trigger detail-schedule-trigger"
+                disabled={currentTask.source === "jira" || savingProperty === "schedule"}
+                title={currentTask.scheduleNextAt
+                  ? text(
+                    `下次执行 ${new Date(currentTask.scheduleNextAt).toLocaleString(locale)}`,
+                    `Next run ${new Date(currentTask.scheduleNextAt).toLocaleString(locale)}`,
+                  )
+                  : undefined}
+                onClick={() => setPropertyMenu(propertyMenu === "schedule" ? null : "schedule")}
+              >
+                {currentTask.schedule
+                  ? describeSchedule(currentTask.schedule, text)
+                  : text("未设置", "Not set")}
+              </button>
+              {currentTask.scheduleNextAt && (
+                <span className="detail-schedule-next">
+                  {text(
+                    `下次 ${new Date(currentTask.scheduleNextAt).toLocaleString(locale)}`,
+                    `Next ${new Date(currentTask.scheduleNextAt).toLocaleString(locale)}`,
+                  )}
+                </span>
+              )}
+              {propertyMenu === "schedule" && (
+                <div className="detail-property-popover-anchor">
+                  <ScheduleEditor
+                    schedule={currentTask.schedule}
+                    dueDate={currentTask.dueDate}
+                    onApply={({ schedule, dueDate: nextDueDate }) => {
+                      setPropertyMenu(null);
+                      void saveTask({
+                        schedule,
+                        ...(nextDueDate ? { dueDate: nextDueDate } : {}),
+                      }, "schedule");
+                    }}
+                    onClose={() => setPropertyMenu(null)}
+                  />
+                </div>
+              )}
+            </div>
+            {scheduleRunList.length > 0 && (
+              <div className="detail-property-row detail-schedule-runs">
+                <span className="detail-property-icon" aria-hidden="true"><RecurrenceIcon color="currentColor" size={14} /></span>
+                <span className="detail-property-label">{text("执行轮次", "Rounds")}</span>
+                <ul className="schedule-run-list">
+                  {scheduleRunList.slice(0, 20).map((run) => (
+                    <li key={run.id} className={`schedule-run is-${run.status}`}>
+                      <b>{text(`第 ${run.sequence} 轮`, `Round ${run.sequence}`)}</b>
+                      <span className="schedule-run-trigger">
+                        {run.trigger === "schedule" ? text("定时", "Scheduled") : text("手动", "Manual")}
+                      </span>
+                      <time title={exactTime(run.startedAt, locale)}>{exactTime(run.startedAt, locale)}</time>
+                      <span className="schedule-run-status">
+                        {run.status === "running"
+                          ? text("执行中", "Running")
+                          : run.status === "completed"
+                            ? text("已完成", "Completed")
+                            : run.status === "failed"
+                              ? text("失败", "Failed")
+                              : text("已中断", "Interrupted")}
+                      </span>
+                      {run.error && (
+                        <span className="schedule-run-error" title={run.error}>{run.error}</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             <IssueRelationSidebar
               task={currentTask}
               tasks={tasks}

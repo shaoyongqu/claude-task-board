@@ -4,6 +4,7 @@ import { taskPriorityLabel, taskStatusLabel, useTaskboardI18n } from "../i18n";
 import { labelPresentation } from "../labels";
 import type { TaskCardPresentation } from "../taskConversations";
 import { TASK_PRIORITIES, TASK_STATUSES, type ActorIdentity, type Task, type TaskDraft, type TaskStatus } from "../types";
+import { scheduleIsPeriodic } from "../schedule";
 import { ActorAvatar } from "./ActorAvatar";
 import { LinearIcon } from "./LinearIcon";
 import { DueDateIcon, PriorityIcon, StatusIcon } from "./SemanticIcons";
@@ -135,7 +136,12 @@ export function IssueListView({
                                 value={task.dueDate}
                                 onChange={(event) => void onUpdate(task, {
                                   dueDate: event.target.value || null,
-                                  ...(event.target.value ? {} : { recurrence: null }),
+                                  ...(event.target.value
+                                    ? {}
+                                    : {
+                                      recurrence: null,
+                                      ...(scheduleIsPeriodic(task.schedule) ? { schedule: null } : {}),
+                                    }),
                                 }).catch(() => {})}
                               />
                             </label>

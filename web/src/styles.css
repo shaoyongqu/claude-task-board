@@ -6575,6 +6575,235 @@ kbd {
   color: var(--danger) !important;
 }
 
+.schedule-popover {
+  width: 324px;
+  padding: 10px;
+}
+
+.schedule-mode-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.schedule-mode-row button {
+  height: 26px;
+  padding: 0 10px;
+  border: 0.5px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.schedule-mode-row button.is-selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text-primary);
+}
+
+.schedule-field {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  align-items: center;
+  min-height: 34px;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.schedule-field > span:first-child { grid-column: 1; }
+
+.schedule-field input {
+  min-width: 0;
+  width: 100%;
+  height: 28px;
+  padding: 0 7px;
+  border: 0.5px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text-primary);
+}
+
+.schedule-controls {
+  display: grid;
+  gap: 2px;
+}
+
+.schedule-controls input {
+  width: 100%;
+}
+
+.schedule-controls small {
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+.schedule-weekdays {
+  display: flex;
+  gap: 4px;
+}
+
+.schedule-weekdays button {
+  flex: 1;
+  height: 26px;
+  padding: 0;
+  border: 0.5px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.schedule-weekdays button.is-selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text-primary);
+}
+
+.schedule-preview {
+  margin-top: 8px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.schedule-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.schedule-actions .destructive-menu-row {
+  flex: 1;
+  width: auto;
+  margin-top: 0;
+}
+
+.schedule-actions .recurrence-save {
+  flex: 1;
+}
+
+.schedule-actions .recurrence-save:disabled {
+  opacity: 0.5;
+}
+
+.schedule-cancel {
+  flex: 1;
+  height: 30px;
+  margin-top: 6px;
+  border: 0.5px solid var(--border-strong);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.detail-property-row.schedule-property {
+  position: relative;
+}
+
+.detail-schedule-trigger {
+  flex: 1;
+  justify-content: flex-start;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detail-schedule-next {
+  flex-basis: 100%;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.detail-property-popover-anchor .composer-popover {
+  top: calc(100% + 6px);
+  left: auto;
+  right: 0;
+  z-index: 1400;
+}
+
+.schedule-chip {
+  cursor: default;
+}
+
+.schedule-run-list {
+  flex-basis: 100%;
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 168px;
+  overflow-y: auto;
+}
+
+.schedule-run {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.schedule-run b {
+  color: var(--text-primary);
+  font-size: 11px;
+}
+
+.schedule-run time {
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+.schedule-run-trigger {
+  padding: 0 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-tertiary) 14%, transparent);
+  font-size: 10px;
+}
+
+.schedule-run-status {
+  font-size: 10px;
+}
+
+.schedule-run.is-running .schedule-run-status {
+  color: var(--accent);
+}
+
+.schedule-run.is-completed .schedule-run-status {
+  color: var(--success, #4a9);
+}
+
+.schedule-run.is-failed .schedule-run-status,
+.schedule-run.is-interrupted .schedule-run-status {
+  color: var(--danger);
+}
+
+.schedule-run-error {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--danger);
+  font-size: 10px;
+}
+
+.comment-run-badge {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  font-size: 10px;
+  line-height: 16px;
+}
+
 .composer-attach-icon {
   position: relative;
   display: grid;

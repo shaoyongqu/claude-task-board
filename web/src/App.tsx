@@ -663,6 +663,7 @@ function taskToDraft(task: Task): TaskDraft {
     startDate: task.startDate,
     dueDate: task.dueDate,
     recurrence: task.recurrence,
+    schedule: task.schedule,
     modelProfileId: task.modelProfileId,
     reasoningEffort: task.reasoningEffort,
   };
@@ -2901,6 +2902,8 @@ export function App() {
         ...taskToDraft(task),
         assigneeTarget: assigneeTargetForActor(task.assignee, currentUser),
         developmentContext: null,
+        // A copy must not inherit the original's automatic executions.
+        schedule: null,
       });
       setTasks((current) => sortTasks([...current, duplicated]));
       pushUndo(text(

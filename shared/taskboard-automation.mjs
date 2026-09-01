@@ -125,18 +125,37 @@ function shellQuote(value) {
 // session, so the controller reads, executes, verifies, comments, and moves it
 // to in_review — the same lifecycle an auto-claimed todo goes through.
 export function buildTaskboardTaskRunPrompt(request) {
+  return buildTaskRunPrompt(request, `议题 ${request.issueId} 已由用户在看板移入「处理中」，需要你立即认领并完成。`);
+}
+
+// Same lifecycle, triggered by the issue's schedule instead of the user: the
+// scheduler already moved the issue to in_progress and bound this session.
+// Each round is an independent execution of the same issue definition; earlier
+// rounds only survive as comments and run history.
+export function buildTaskboardScheduledRunPrompt(request, sequence) {
+  const roundNote = sequence !== undefined
+    ? `本次为第 ${sequence} 轮定时执行，历史轮次的记录保留在评论中；判断当前状态时以最近一轮的评论为准。`
+    : "";
+  return buildTaskRunPrompt(
+    request,
+    `议题 ${request.issueId} 的定时执行计划已到期，看板已将其移入「处理中」并绑定到当前会话，需要你立即执行并完成。${roundNote}`,
+  );
+}
+
+function buildTaskRunPrompt(request, triggerIntro) {
+  const intro = `使用 manage-taskboard 技能（目录 ${request.skillPath}）处理任务面板工作。${triggerIntro}`;
   const taskctlCommand = buildTaskctlCommand(request);
   const bindingOptions = `--binding-thread-id "$CLAUDE_THREAD_ID" --binding-codex-project-id ${JSON.stringify(request.codexProjectId)} --binding-codex-project-kind "local" --binding-codex-host-id "local" --binding-workspace-path ${JSON.stringify(request.workspacePath)}`;
   const executionInstructions = [
     `先运行 ${taskctlCommand} issue get ${request.issueId} --json 读取最新议题内容，再运行 comment list 读取全部评论。根据描述和最新评论判断是否允许开始；若其中写明等待、暂不执行或当前不应开始，报告并结束本轮，不改状态。`,
-    `该议题已由用户移入处理中并绑定到当前会话（threadId 为 $CLAUDE_THREAD_ID）。若 issue get 显示绑定不是当前会话，立即报告并结束，不要改写他人的绑定。`,
+    `该议题已绑定到当前会话（threadId 为 $CLAUDE_THREAD_ID）。若 issue get 显示绑定不是当前会话，立即报告并结束，不要改写他人的绑定。`,
     `确认允许开始后，在本会话内完成实现和验证，不要派发给其他会话。若议题绑定了 branch 或 worktree，必须在该议题绑定的开发上下文执行。`,
     `项目文档（架构、约束与约定）可在需要时用 ${taskctlCommand} project readme get ${request.taskboardProjectId} --json 读取。`,
     `执行完成并验证后，先用 comment add 记录关键改动、验证结果、执行结果和剩余风险，再运行 issue get 读取最新 version，并使用显式 --if-version 和完整 binding（${bindingOptions}）将议题移动到 in_review；成功后更新 ownedVersion。不要省略 binding，不要直接标记为 done。`,
     "若因 version 陈旧发生版本冲突，重新运行 issue get 和 comment list；仅当描述和最新评论未变化且仍绑定当前会话时，用最新 version 重试一次；仍失败则报告并结束。",
   ];
   return [
-    `使用 manage-taskboard 技能（目录 ${request.skillPath}）处理任务面板工作。议题 ${request.issueId} 已由用户在看板移入「处理中」，需要你立即认领并完成。`,
+    intro,
     `本轮所有 taskctl 操作都使用完整命令前缀 ${taskctlCommand}，不要使用 PATH 中的 taskctl。当前会话 ID 已通过环境变量 CLAUDE_THREAD_ID 注入。`,
     ...executionInstructions,
   ].join("\n");

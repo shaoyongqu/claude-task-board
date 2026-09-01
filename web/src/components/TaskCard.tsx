@@ -13,6 +13,7 @@ import {
 } from "../types";
 import { labelPresentation } from "../labels";
 import { taskPriorityLabel, useTaskboardI18n } from "../i18n";
+import { describeSchedule, scheduleIsPeriodic, shortScheduleTime } from "../schedule";
 import { TaskboardIcon } from "./TaskboardIcon";
 import { CLAUDE_AGENT_ACTOR, actorKey, assigneeTargetForActor } from "../actors";
 import type {
@@ -21,7 +22,7 @@ import type {
 } from "../taskConversations";
 import { ActorAvatar } from "./ActorAvatar";
 import { LinearIcon } from "./LinearIcon";
-import { DueDateIcon, PriorityIcon, ProjectIcon } from "./SemanticIcons";
+import { DueDateIcon, PriorityIcon, ProjectIcon, RecurrenceIcon } from "./SemanticIcons";
 import { LabelPicker } from "./LabelPicker";
 import { TaskPropertyPicker } from "./TaskPropertyPicker";
 import { TaskConversationMenu } from "./TaskConversationMenu";
@@ -593,9 +594,40 @@ export function TaskCard({
               disabled={propertyDisabled}
               onChange={(dueDate) => updateProperty({
                 dueDate,
-                ...(dueDate ? {} : { recurrence: null }),
+                ...(dueDate
+                  ? {}
+                  : { recurrence: null, ...(scheduleIsPeriodic(task.schedule) ? { schedule: null } : {}) }),
               }, "dueDate")}
             />
+          )}
+          {!processingCard && task.schedule && (
+            <span
+              className="due-date-chip schedule-chip card-property-control"
+              title={(() => {
+                const rounds = task.scheduleRuns?.total
+                  ? text(` · 已执行 ${task.scheduleRuns.total} 轮`, ` · ${task.scheduleRuns.total} rounds`)
+                  : "";
+                const next = task.scheduleNextAt
+                  ? text(
+                    ` · 下次 ${new Date(task.scheduleNextAt).toLocaleString(locale)}`,
+                    ` · next ${new Date(task.scheduleNextAt).toLocaleString(locale)}`,
+                  )
+                  : "";
+                return `${describeSchedule(task.schedule, text)}${rounds}${next}`;
+              })()}
+            >
+              <RecurrenceIcon color="currentColor" size={12} />
+              {task.scheduleRuns?.current
+                ? text(
+                  `第 ${task.scheduleRuns.current.sequence} 轮`,
+                  `#${task.scheduleRuns.current.sequence}`,
+                )
+                : task.scheduleRuns?.total
+                  ? text(`已执行 ${task.scheduleRuns.total} 轮`, `${task.scheduleRuns.total} rounds`)
+                  : task.scheduleNextAt
+                    ? shortScheduleTime(task.scheduleNextAt, locale)
+                    : text("定时", "sched")}
+            </span>
           )}
           {!processingCard && showsInlineParticipants && (
             <AssigneeControl

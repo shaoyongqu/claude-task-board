@@ -24,6 +24,7 @@ import type {
   ProjectReadme,
   ProjectReadmeAttachment,
   ProjectSummary,
+  ScheduleRun,
   Task,
   TaskChangeActivity,
   TaskboardMetadata,
@@ -727,6 +728,14 @@ export async function getTask(taskId: string, signal?: AbortSignal): Promise<Tas
     { signal },
   );
   return data.task;
+}
+
+export async function listScheduleRuns(taskId: string, signal?: AbortSignal): Promise<ScheduleRun[]> {
+  const data = await request<{ runs: ScheduleRun[] }>(
+    `/api/tasks/${encodeURIComponent(taskId)}/schedule-runs`,
+    { signal },
+  );
+  return data.runs;
 }
 
 export function listArchivedTasks(projectId?: string, signal?: AbortSignal): Promise<Task[]> {

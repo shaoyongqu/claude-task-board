@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import { DEFAULT_LABEL_NAMES, JIRA_PROJECT_ID } from "../shared/domain.mjs";
+import { nextScheduleOccurrence } from "../shared/schedule.mjs";
 
 const DEFAULT_PROJECT_LABELS_JSON = JSON.stringify(DEFAULT_LABEL_NAMES);
 const TASK_TREE_MAX_NODES = 1_000;
@@ -196,6 +197,24 @@ function taskFieldChanges(task, changes) {
   });
 }
 
+function scheduleNextAtIso(schedule) {
+  const next = nextScheduleOccurrence(schedule, Date.now());
+  return next !== null ? new Date(next).toISOString() : null;
+}
+
+function scheduleRunFromRow(row) {
+  return {
+    id: row.id,
+    sequence: row.sequence,
+    threadId: row.thread_id ?? null,
+    trigger: row.trigger_type,
+    status: row.status,
+    error: row.error ?? null,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at ?? null,
+  };
+}
+
 function relationActivityValue(type, task) {
   return {
     type,
@@ -260,6 +279,9 @@ function taskFromRow(row) {
     recurrence: row.recurrence_interval && row.recurrence_unit
       ? { interval: row.recurrence_interval, unit: row.recurrence_unit }
       : null,
+    schedule: row.schedule_config ? JSON.parse(row.schedule_config) : null,
+    scheduleNextAt: row.schedule_next_at ?? null,
+    scheduleLastRunAt: row.schedule_last_run_at ?? null,
     source: row.external_source === "jira" ? "jira" : "local",
     externalOrigin: row.external_origin ?? null,
     externalKey: row.external_key ?? null,
@@ -537,6 +559,9 @@ export class TaskboardDatabase {
         due_date TEXT,
         recurrence_interval INTEGER,
         recurrence_unit TEXT,
+        schedule_config TEXT,
+        schedule_next_at TEXT,
+        schedule_last_run_at TEXT,
         external_source TEXT,
         external_origin TEXT,
         external_id TEXT,
@@ -772,6 +797,16 @@ export class TaskboardDatabase {
     if (!taskColumns.some((column) => column.name === "recurrence_unit")) {
       this.database.exec("ALTER TABLE tasks ADD COLUMN recurrence_unit TEXT");
     }
+    for (const column of ["schedule_config", "schedule_next_at", "schedule_last_run_at"]) {
+      if (!taskColumns.some((candidate) => candidate.name === column)) {
+        this.database.exec(`ALTER TABLE tasks ADD COLUMN ${column} TEXT`);
+      }
+    }
+    this.database.exec(`
+      CREATE INDEX IF NOT EXISTS tasks_schedule_next_at
+      ON tasks(schedule_next_at)
+      WHERE schedule_next_at IS NOT NULL
+    `);
     this.#migrateTaskStatuses();
     const migratedTaskColumns = this.database.prepare("PRAGMA table_info(tasks)").all();
     if (!migratedTaskColumns.some((column) => column.name === "creator_type")) {
@@ -936,6 +971,23 @@ export class TaskboardDatabase {
           SELECT 1 FROM ancestors WHERE id = NEW.target_task_id
         );
       END;
+    `);
+
+    this.database.exec(`
+      CREATE TABLE IF NOT EXISTS task_schedule_runs (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        sequence INTEGER NOT NULL,
+        thread_id TEXT,
+        trigger_type TEXT NOT NULL CHECK (trigger_type IN ('schedule', 'manual')),
+        status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed', 'interrupted')),
+        error TEXT,
+        started_at TEXT NOT NULL,
+        finished_at TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS task_schedule_runs_task
+        ON task_schedule_runs(task_id, sequence);
     `);
 
     const taskRelationColumns = this.database.prepare("PRAGMA table_info(task_relations)").all();
@@ -2135,12 +2187,17 @@ export class TaskboardDatabase {
     const commentsByTask = this.#commentsForTaskActivity(rows.map((row) => row.id));
     const activitiesByTask = this.#activitiesForTasks(rows.map((row) => row.id));
     const previewImagesByTask = this.#taskPreviewImages(rows.map((row) => row.id));
-    return rows.map((row) => attachTaskActivity(
-      this.#taskWithRelations(row),
-      commentsByTask.get(row.id) ?? [],
-      activitiesByTask.get(row.id) ?? [],
-      previewImagesByTask.get(row.id) ?? null,
-    ));
+    const scheduleRunsByTask = this.#scheduleRunSummaries(rows.map((row) => row.id));
+    return rows.map((row) => {
+      const task = attachTaskActivity(
+        this.#taskWithRelations(row),
+        commentsByTask.get(row.id) ?? [],
+        activitiesByTask.get(row.id) ?? [],
+        previewImagesByTask.get(row.id) ?? null,
+      );
+      task.scheduleRuns = scheduleRunsByTask.get(row.id) ?? { total: 0, current: null, latest: null };
+      return task;
+    });
   }
 
   getTask(id) {
@@ -2150,7 +2207,91 @@ export class TaskboardDatabase {
     const comments = this.#commentsForTaskActivity([task.id]).get(task.id) ?? [];
     const activities = this.#activitiesForTasks([task.id]).get(task.id) ?? [];
     const previewImage = this.#taskPreviewImages([task.id]).get(task.id) ?? null;
-    return attachTaskActivity(task, comments, activities, previewImage);
+    const attached = attachTaskActivity(task, comments, activities, previewImage);
+    attached.scheduleRuns = this.#scheduleRunSummaries([task.id]).get(task.id)
+      ?? { total: 0, current: null, latest: null };
+    return attached;
+  }
+
+  // Issues whose schedule is due for a scheduled execution, oldest first.
+  listDueScheduledTasks(nowIso) {
+    const rows = this.database.prepare(`
+      SELECT * FROM tasks
+      WHERE schedule_next_at IS NOT NULL AND schedule_next_at <= ? AND archived_at IS NULL
+      ORDER BY schedule_next_at, id
+    `).all(nowIso);
+    return rows.map((row) => this.#taskWithRelations(row));
+  }
+
+  // Execution rounds of a scheduled issue, newest first.
+  listScheduleRuns(taskId, limit = 100) {
+    const task = this.#requireTask(taskId);
+    const rows = this.database.prepare(`
+      SELECT * FROM task_schedule_runs
+      WHERE task_id = ?
+      ORDER BY sequence DESC
+      LIMIT ?
+    `).all(task.id, limit);
+    return rows.map(scheduleRunFromRow);
+  }
+
+  // One round of automatic execution: its own session, status, and lifetime,
+  // independent of every other round of the same issue.
+  createScheduleRun(taskId, { threadId, trigger }) {
+    const task = this.#requireTask(taskId);
+    const timestamp = now();
+    const id = randomUUID();
+    const sequence = (this.database.prepare(`
+      SELECT MAX(sequence) AS maximum FROM task_schedule_runs WHERE task_id = ?
+    `).get(task.id).maximum ?? 0) + 1;
+    this.database.prepare(`
+      INSERT INTO task_schedule_runs (id, task_id, sequence, thread_id, trigger_type, status, started_at)
+      VALUES (?, ?, ?, ?, ?, 'running', ?)
+    `).run(id, task.id, sequence, threadId ?? null, trigger, timestamp);
+    return scheduleRunFromRow(this.database.prepare("SELECT * FROM task_schedule_runs WHERE id = ?").get(id));
+  }
+
+  finishScheduleRun(runId, { status, error = null }) {
+    const finishedAt = now();
+    const result = this.database.prepare(`
+      UPDATE task_schedule_runs
+      SET status = ?, error = ?, finished_at = ?
+      WHERE id = ? AND status = 'running'
+    `).run(status, error, finishedAt, runId);
+    return result.changes === 1;
+  }
+
+  // Rounds left "running" by a previous server process: those controllers are
+  // gone, so mark them interrupted when the scheduler resumes.
+  interruptRunningScheduleRuns() {
+    const timestamp = now();
+    const result = this.database.prepare(`
+      UPDATE task_schedule_runs
+      SET status = 'interrupted', error = '服务重启，执行中断', finished_at = ?
+      WHERE status = 'running'
+    `).run(timestamp);
+    return result.changes;
+  }
+
+  // Scheduler bookkeeping when an occurrence fires or is skipped: advance the
+  // next run (null consumes the schedule) and stamp the last run. Deliberately
+  // does not bump version — this is runtime state, not a user edit.
+  recordTaskScheduleRun(id, nextAtIso, clearSchedule = false) {
+    const timestamp = now();
+    if (clearSchedule) {
+      this.database.prepare(`
+        UPDATE tasks
+        SET schedule_config = NULL, schedule_next_at = ?, schedule_last_run_at = ?, updated_at = ?
+        WHERE id = ?
+      `).run(nextAtIso, timestamp, timestamp, id);
+    } else {
+      this.database.prepare(`
+        UPDATE tasks
+        SET schedule_next_at = ?, schedule_last_run_at = ?, updated_at = ?
+        WHERE id = ?
+      `).run(nextAtIso, timestamp, timestamp, id);
+    }
+    return this.getTask(id);
   }
 
   getTaskTree(id, direction, depth) {
@@ -2277,9 +2418,10 @@ export class TaskboardDatabase {
           assignee_type, assignee_id, assignee_name, assignee_avatar_url,
           git_branch, worktree_path, worktree_branch,
           start_date, due_date, recurrence_interval, recurrence_unit,
+          schedule_config, schedule_next_at,
           model_profile_id,
           archived_at, version, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1, ?, ?)
       `).run(
         id,
         identifier,
@@ -2306,6 +2448,8 @@ export class TaskboardDatabase {
         input.dueDate,
         input.recurrence?.interval ?? null,
         input.recurrence?.unit ?? null,
+        input.schedule ? JSON.stringify(input.schedule) : null,
+        scheduleNextAtIso(input.schedule),
         input.modelProfileId ?? null,
         timestamp,
         timestamp,
@@ -2356,6 +2500,10 @@ export class TaskboardDatabase {
     if (recurrence && !dueDate) {
       throw new ApiError(400, "INVALID_FIELD", "A recurring issue requires a due date");
     }
+    const schedule = Object.hasOwn(changes, "schedule") ? changes.schedule : current.schedule;
+    if (schedule && schedule.type !== "once" && !dueDate) {
+      throw new ApiError(400, "INVALID_FIELD", "A scheduled issue requires a due date");
+    }
 
     const columns = {
       projectId: "project_id",
@@ -2384,6 +2532,11 @@ export class TaskboardDatabase {
       if (key === "recurrence") {
         assignments.push("recurrence_interval = ?", "recurrence_unit = ?");
         values.push(value?.interval ?? null, value?.unit ?? null);
+        continue;
+      }
+      if (key === "schedule") {
+        assignments.push("schedule_config = ?", "schedule_next_at = ?");
+        values.push(value ? JSON.stringify(value) : null, scheduleNextAtIso(value));
         continue;
       }
       if (key === "assignee") {
@@ -2545,7 +2698,7 @@ export class TaskboardDatabase {
     try {
       const result = this.database.prepare(`
         UPDATE tasks
-        SET archived_at = ?, ${threadAssignment} version = version + 1, updated_at = ?
+        SET archived_at = ?, schedule_config = NULL, schedule_next_at = NULL, ${threadAssignment} version = version + 1, updated_at = ?
         WHERE id = ? AND version = ?
       `).run(timestamp, ...(storedBinding ?? []), timestamp, current.id, version);
       if (result.changes !== 1) {
@@ -3016,6 +3169,46 @@ export class TaskboardDatabase {
       .map(parseAiChatTodoProgress)
       .find(Boolean) ?? null;
     return thread;
+  }
+
+  // Per-issue execution-round summary embedded in task payloads: how many
+  // rounds ran, which one is live, and how the latest one ended.
+  #scheduleRunSummaries(taskIds) {
+    const summaries = new Map(taskIds.map((taskId) => [taskId, { total: 0, current: null, latest: null }]));
+    for (let offset = 0; offset < taskIds.length; offset += 400) {
+      const chunk = taskIds.slice(offset, offset + 400);
+      if (chunk.length === 0) continue;
+      const placeholders = chunk.map(() => "?").join(", ");
+      const totals = this.database.prepare(`
+        SELECT task_id, COUNT(*) AS total
+        FROM task_schedule_runs
+        WHERE task_id IN (${placeholders})
+        GROUP BY task_id
+      `).all(...chunk);
+      for (const row of totals) {
+        summaries.get(row.task_id).total = row.total;
+      }
+      const latestRows = this.database.prepare(`
+        SELECT run.* FROM task_schedule_runs AS run
+        WHERE run.task_id IN (${placeholders})
+          AND NOT EXISTS (
+            SELECT 1 FROM task_schedule_runs AS newer
+            WHERE newer.task_id = run.task_id AND newer.sequence > run.sequence
+          )
+      `).all(...chunk);
+      for (const row of latestRows) {
+        summaries.get(row.task_id).latest = scheduleRunFromRow(row);
+      }
+      const currentRows = this.database.prepare(`
+        SELECT * FROM task_schedule_runs
+        WHERE task_id IN (${placeholders}) AND status = 'running'
+        ORDER BY sequence
+      `).all(...chunk);
+      for (const row of currentRows) {
+        summaries.get(row.task_id).current = scheduleRunFromRow(row);
+      }
+    }
+    return summaries;
   }
 
   #commentsForTaskActivity(taskIds) {

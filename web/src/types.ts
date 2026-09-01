@@ -32,6 +32,34 @@ export type Recurrence = {
   unit: "day" | "week" | "month" | "year";
 };
 
+// Automatic execution schedule for an issue. Times are in the board host's
+// local timezone; weekly weekdays follow Date.getDay() (0 = Sunday).
+export type Schedule =
+  | { type: "once"; at: string }
+  | { type: "daily"; time: string }
+  | { type: "weekly"; weekdays: number[]; time: string }
+  | { type: "monthly"; day: number; time: string }
+  | { type: "cron"; expression: string };
+
+// One independent execution round of a scheduled issue: its own session,
+// status, and lifetime, separate from every other round.
+export interface ScheduleRun {
+  id: string;
+  sequence: number;
+  threadId: string | null;
+  trigger: "schedule" | "manual";
+  status: "running" | "completed" | "failed" | "interrupted";
+  error: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+export interface ScheduleRunSummary {
+  total: number;
+  current: ScheduleRun | null;
+  latest: ScheduleRun | null;
+}
+
 export interface DevelopmentScan {
   workspacePath: string | null;
   contexts: DevelopmentContext[];
@@ -447,6 +475,10 @@ export interface Task {
   startDate: string | null;
   dueDate: string | null;
   recurrence: Recurrence | null;
+  schedule: Schedule | null;
+  scheduleNextAt: string | null;
+  scheduleLastRunAt: string | null;
+  scheduleRuns: ScheduleRunSummary;
   source: "local" | "jira";
   externalOrigin?: string | null;
   externalKey?: string | null;
@@ -550,6 +582,7 @@ export interface TaskDraft {
   startDate: string | null;
   dueDate: string | null;
   recurrence: Recurrence | null;
+  schedule: Schedule | null;
   modelProfileId?: string | null;
   reasoningEffort?: string | null;
 }

@@ -20,6 +20,7 @@ import {
 import { resolveClaudeExecutable } from "../shared/claude-executable.mjs";
 import { withoutTaskboardLauncherEnvironment } from "../shared/taskboard-environment.mjs";
 import { parseTaskboardAutomationHostRequest } from "../shared/taskboard-automation.mjs";
+import { nextScheduleOccurrence, parseScheduleConfig } from "../shared/schedule.mjs";
 import { LocalAutomationScheduler } from "./automation-scheduler.mjs";
 import { SessionRegistry } from "./session-registry.mjs";
 import { launchTerminalSession } from "./terminal-launcher.mjs";
@@ -437,6 +438,19 @@ function parseRecurrence(value) {
   return { interval: value.interval, unit: value.unit };
 }
 
+function parseSchedule(value) {
+  if (value === null) return null;
+  const parsed = parseScheduleConfig(value);
+  if (!parsed.ok) throw new ApiError(400, "INVALID_FIELD", parsed.error);
+  const schedule = parsed.schedule;
+  if (schedule && nextScheduleOccurrence(schedule, Date.now()) === null) {
+    throw new ApiError(400, "INVALID_FIELD", schedule.type === "once"
+      ? "'schedule.at' must be in the future"
+      : "'schedule.expression' matches no time within the next 4 years");
+  }
+  return schedule;
+}
+
 function parseVersion(value) {
   if (!Number.isSafeInteger(value) || value < 1) {
     throw new ApiError(400, "INVALID_FIELD", "'version' must be a positive integer");
@@ -665,7 +679,7 @@ function parseTaskCreate(body) {
   assertPlainObject(body);
   assertAllowedKeys(body, new Set([
     "projectId", "title", "description", "status", "priority", "labels", "sortOrder", "threadId", "threadBinding",
-    "assigneeTarget", "developmentContext", "startDate", "dueDate", "recurrence", "modelProfileId",
+    "assigneeTarget", "developmentContext", "startDate", "dueDate", "recurrence", "schedule", "modelProfileId",
   ]));
   const projectId = validateProjectId(body.projectId ?? DEFAULT_PROJECT_ID);
   const task = {
@@ -683,10 +697,14 @@ function parseTaskCreate(body) {
     startDate: parseDueDate(body.startDate ?? null, "startDate"),
     dueDate: parseDueDate(body.dueDate ?? null),
     recurrence: parseRecurrence(body.recurrence ?? null),
+    schedule: parseSchedule(body.schedule ?? null),
     modelProfileId: parseOptionalModelProfileId(body.modelProfileId) ?? null,
   };
   if (task.recurrence && !task.dueDate) {
     throw new ApiError(400, "INVALID_FIELD", "A recurring issue requires 'dueDate'");
+  }
+  if (task.schedule && task.schedule.type !== "once" && !task.dueDate) {
+    throw new ApiError(400, "INVALID_FIELD", "A scheduled issue requires 'dueDate'");
   }
   return task;
 }
@@ -695,7 +713,7 @@ function parseTaskPatch(body) {
   assertPlainObject(body);
   assertAllowedKeys(body, new Set([
     "version", "projectId", "title", "description", "status", "priority", "labels", "threadId", "threadBinding",
-    "assigneeTarget", "developmentContext", "startDate", "dueDate", "recurrence", "modelProfileId",
+    "assigneeTarget", "developmentContext", "startDate", "dueDate", "recurrence", "schedule", "modelProfileId",
     "reasoningEffort",
   ]));
   const version = parseVersion(body.version);
@@ -713,6 +731,7 @@ function parseTaskPatch(body) {
   if (body.startDate !== undefined) changes.startDate = parseDueDate(body.startDate, "startDate");
   if (body.dueDate !== undefined) changes.dueDate = parseDueDate(body.dueDate);
   if (body.recurrence !== undefined) changes.recurrence = parseRecurrence(body.recurrence);
+  if (body.schedule !== undefined) changes.schedule = parseSchedule(body.schedule);
   if (body.modelProfileId !== undefined) {
     changes.modelProfileId = parseOptionalModelProfileId(body.modelProfileId) ?? null;
   }
@@ -721,6 +740,9 @@ function parseTaskPatch(body) {
   }
   if (changes.recurrence && body.dueDate === null) {
     throw new ApiError(400, "INVALID_FIELD", "A recurring issue requires 'dueDate'");
+  }
+  if (changes.schedule && changes.schedule.type !== "once" && body.dueDate === null) {
+    throw new ApiError(400, "INVALID_FIELD", "A scheduled issue requires 'dueDate'");
   }
   if (Object.keys(changes).length === 0 && assigneeTarget === undefined) {
     throw new ApiError(400, "INVALID_BODY", "PATCH requires at least one task field");
@@ -2069,6 +2091,9 @@ export function createTaskboardServer(options = {}) {
     processEnv: rawSchedulerEnvironment,
     killGraceMs: 1_000,
     persistPath: path.join(resolved.dataDirectory, "automation-configs.json"),
+    // Scheduled executions move issues outside any HTTP request; broadcast the
+    // resulting task so every board client refreshes.
+    onTaskChanged: (task) => events.emit("task.updated", { task }),
   });
   const sessionRegistry = new SessionRegistry();
   let boardBaseUrl = null;
@@ -3573,7 +3598,7 @@ export function createTaskboardServer(options = {}) {
         return sendJson(response, 200, { tree: database.getTaskTree(id, direction, depth) });
       }
 
-      const taskRoute = pathname.match(/^\/api\/tasks\/([^/]+)(?:\/(archive|restore|move))?$/);
+      const taskRoute = pathname.match(/^\/api\/tasks\/([^/]+)(?:\/(archive|restore|move|schedule-runs))?$/);
       if (taskRoute) {
         let id;
         try {
@@ -3585,6 +3610,15 @@ export function createTaskboardServer(options = {}) {
           throw new ApiError(400, "INVALID_PATH", "Task id is invalid");
         }
         const action = taskRoute[2];
+        if (action === "schedule-runs") {
+          if (request.method !== "GET") {
+            return methodNotAllowed(response, ["GET"]);
+          }
+          if ([...url.searchParams.keys()].length > 0) {
+            throw new ApiError(400, "UNKNOWN_QUERY_PARAMETER", "Schedule run listing does not accept query parameters");
+          }
+          return sendJson(response, 200, { runs: database.listScheduleRuns(id) });
+        }
         if (!action && request.method === "GET") {
           if ([...url.searchParams.keys()].length > 0) {
             throw new ApiError(400, "UNKNOWN_QUERY_PARAMETER", "GET /api/tasks/:id does not accept query parameters");
@@ -3657,6 +3691,13 @@ export function createTaskboardServer(options = {}) {
             }
             if (assigneeTarget !== undefined) {
               throw new ApiError(409, "JIRA_ASSIGNEE_UNAVAILABLE", "请在 Jira 中修改经办人");
+            }
+            if (Object.hasOwn(changes, "schedule")) {
+              throw new ApiError(
+                409,
+                "JIRA_SCHEDULE_UNAVAILABLE",
+                "Jira 任务不支持定时执行，请在本地项目议题上配置",
+              );
             }
             const dueDate = Object.hasOwn(changes, "dueDate") ? changes.dueDate : current.dueDate;
             const recurrence = Object.hasOwn(changes, "recurrence")
