@@ -512,18 +512,18 @@ export function TaskCard({
           <span className="task-identifier">ID: {displayIdentifier}</span>
         </span>
         {presentation.unread && <span className="task-unread-dot" aria-label={text("有未读更新", "Unread updates")} />}
-        {task.schedule && (
-          <span
-            className="card-schedule-hint"
-            aria-label={text("定时执行议题", "Scheduled issue")}
-            title={text(
-              "定时/周期执行议题：在 等待认领、处理中、等你确认 之间流转；到约定时间自动执行，超出截止时间则暂停等待；不会被自动认领；确认本轮后回到等待认领等待下一次执行；移入待立项将取消定时设置。",
-              "Scheduled issue: cycles through Todo / In Progress / In Review; fires automatically at the configured time and pauses past its due date; never auto-claimed; confirming a round returns it to Todo for the next run; moving to Backlog clears the schedule.",
-            )}
-          >
-            !
-          </span>
-        )}
+        {task.schedule && (() => {
+          const hint = text(
+            "定时/周期执行议题：在 等待认领、处理中、等你确认 之间流转；到约定时间自动执行，超出截止时间则暂停等待；不会被自动认领；确认本轮后回到等待认领等待下一次执行；移入待立项将取消定时设置。",
+            "Scheduled issue: cycles through Todo / In Progress / In Review; fires automatically at the configured time and pauses past its due date; never auto-claimed; confirming a round returns it to Todo for the next run; moving to Backlog clears the schedule.",
+          );
+          return (
+            <span className="card-schedule-hint" tabIndex={0} aria-label={hint}>
+              !
+              <span className="card-schedule-tooltip" role="tooltip">{hint}</span>
+            </span>
+          );
+        })()}
         {task.status === "in_review" && onComplete && (() => {
           const roundConfirm = nextRunPending(task);
           const label = roundConfirm

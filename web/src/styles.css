@@ -2396,6 +2396,11 @@ kbd {
 }
 
 .card-schedule-hint {
+  position: relative;
+  /* Above the card-wide open button (z-index 1) so hover reaches the badge,
+     and pointer events back on: card children are none by default. */
+  z-index: 2;
+  pointer-events: auto;
   display: grid;
   place-items: center;
   width: 14px;
@@ -2408,6 +2413,33 @@ kbd {
   line-height: 1;
   cursor: help;
   flex: none;
+}
+
+.card-schedule-tooltip {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 6px);
+  right: -2px;
+  display: none;
+  width: max-content;
+  max-width: min(280px, calc(100vw - 24px));
+  padding: 6px 8px;
+  border: var(--border-hairline) solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.14);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 16px;
+  text-align: left;
+  pointer-events: none;
+  white-space: normal;
+}
+
+.card-schedule-hint:hover .card-schedule-tooltip,
+.card-schedule-hint:focus-visible .card-schedule-tooltip {
+  display: block;
 }
 
 .task-card.is-context-open {
