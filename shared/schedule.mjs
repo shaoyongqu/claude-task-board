@@ -227,6 +227,14 @@ function nextCronOccurrence(expression, fromMs) {
   return null;
 }
 
+// Epoch milliseconds of the last instant of a YYYY-MM-DD due date in local
+// time. A periodic schedule's next occurrence must land at or before this
+// deadline to fire; later occurrences wait for the due date to be extended.
+export function dueDateDeadline(dueDate) {
+  const [year, month, day] = dueDate.split("-").map(Number);
+  return new Date(year, month - 1, day, 23, 59, 59, 999).getTime();
+}
+
 // ---- local-time helpers ----
 
 function atLocalTime(fromMs, dayOffset, hours, minutes) {

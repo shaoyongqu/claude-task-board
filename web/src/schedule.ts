@@ -76,3 +76,21 @@ export function shortScheduleTime(nextAt: string, locale: string): string {
   const time = next.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", hour12: false });
   return sameDay ? time : `${next.getMonth() + 1}/${next.getDate()} ${time}`;
 }
+
+export function dueDateDeadline(dueDate: string): number {
+  const [year, month, day] = dueDate.split("-").map(Number);
+  return new Date(year, month - 1, day, 23, 59, 59, 999).getTime();
+}
+
+// Whether a periodic issue still has an upcoming occurrence within its due
+// date: confirming such a round returns the issue to todo for the next run
+// instead of completing it.
+export function nextRunPending(task: {
+  schedule: Schedule | null;
+  scheduleNextAt: string | null;
+  dueDate: string | null;
+}): boolean {
+  if (!task.schedule || !task.scheduleNextAt || !task.dueDate) return false;
+  if (task.schedule.type === "once") return false;
+  return new Date(task.scheduleNextAt).getTime() <= dueDateDeadline(task.dueDate);
+}

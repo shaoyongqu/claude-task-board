@@ -13,7 +13,7 @@ import {
 } from "../types";
 import { labelPresentation } from "../labels";
 import { taskPriorityLabel, useTaskboardI18n } from "../i18n";
-import { describeSchedule, scheduleIsPeriodic, shortScheduleTime } from "../schedule";
+import { describeSchedule, nextRunPending, scheduleIsPeriodic, shortScheduleTime } from "../schedule";
 import { TaskboardIcon } from "./TaskboardIcon";
 import { CLAUDE_AGENT_ACTOR, actorKey, assigneeTargetForActor } from "../actors";
 import type {
@@ -47,7 +47,7 @@ interface TaskCardProps {
   onCreateLabel: (label: string) => Promise<void>;
   onEdit: (task: Task) => void;
   onUpdate: (task: Task, changes: Partial<TaskDraft>) => Promise<Task>;
-  onComplete?: (task: Task) => Promise<void>;
+  onComplete?: (task: Task, status: "todo" | "done") => Promise<void>;
   onTerminateExecution?: (task: Task) => void;
   onContextMenu: (task: Task, position: { x: number; y: number }) => void;
   onDragStart: (task: Task, height: number) => void;
@@ -478,7 +478,7 @@ export function TaskCard({
 
   return (
     <article
-      className={`task-card task-card-${variant} status-${task.status}${processingCard ? " is-processing-card" : ""}${processingCard && presentation.processing.running ? " is-running-card" : ""}${image ? " has-media" : ""}${presentation.unread ? " is-unread" : ""}${isDragging ? " is-dragging" : ""}${dragShift ? " is-drag-shifted" : ""}${isMoving ? " is-moving" : ""}${isSettling ? " is-settling" : ""}${isContextMenuOpen ? " is-context-open" : ""}${propertyMenu ? " is-property-menu-open" : ""}`}
+      className={`task-card task-card-${variant} status-${task.status}${task.schedule ? " has-schedule" : ""}${processingCard ? " is-processing-card" : ""}${processingCard && presentation.processing.running ? " is-running-card" : ""}${image ? " has-media" : ""}${presentation.unread ? " is-unread" : ""}${isDragging ? " is-dragging" : ""}${dragShift ? " is-drag-shifted" : ""}${isMoving ? " is-moving" : ""}${isSettling ? " is-settling" : ""}${isContextMenuOpen ? " is-context-open" : ""}${propertyMenu ? " is-property-menu-open" : ""}`}
       style={{
         viewTransitionName: task.status === "in_review" ? `review-task-${task.id}` : "none",
         ...(dragShift ? { transform: `translate3d(0, ${dragShift}px, 0)` } : {}),
@@ -512,27 +512,49 @@ export function TaskCard({
           <span className="task-identifier">ID: {displayIdentifier}</span>
         </span>
         {presentation.unread && <span className="task-unread-dot" aria-label={text("有未读更新", "Unread updates")} />}
-        {task.status === "in_review" && onComplete && (
-          <button
-            className="task-card-complete"
-            type="button"
-            aria-label={text(`完成 ${displayIdentifier}`, `Complete ${displayIdentifier}`)}
-            title={text("完成", "Complete")}
-            onClick={(event) => {
-              event.stopPropagation();
-              const card = event.currentTarget.closest<HTMLElement>(".task-card")!;
-              card.style.viewTransitionName = "completing-task";
-              const transition = document.startViewTransition(() => onComplete(task));
-              void transition.finished.then(
-                () => { card.style.viewTransitionName = `review-task-${task.id}`; },
-                () => { card.style.viewTransitionName = `review-task-${task.id}`; },
-              );
-            }}
+        {task.schedule && (
+          <span
+            className="card-schedule-hint"
+            aria-label={text("定时执行议题", "Scheduled issue")}
+            title={text(
+              "定时/周期执行议题：在 等待认领、处理中、等你确认 之间流转；到约定时间自动执行，超出截止时间则暂停等待；不会被自动认领；确认本轮后回到等待认领等待下一次执行；移入待立项将取消定时设置。",
+              "Scheduled issue: cycles through Todo / In Progress / In Review; fires automatically at the configured time and pauses past its due date; never auto-claimed; confirming a round returns it to Todo for the next run; moving to Backlog clears the schedule.",
+            )}
           >
-            <img src={completeIcon} alt="" aria-hidden="true" />
-            <span>{text("完成", "Complete")}</span>
-          </button>
+            !
+          </span>
         )}
+        {task.status === "in_review" && onComplete && (() => {
+          const roundConfirm = nextRunPending(task);
+          const label = roundConfirm
+            ? text("本轮执行确认", "Confirm round")
+            : text("完成", "Complete");
+          return (
+            <button
+              className={`task-card-complete${roundConfirm ? " is-round-confirm" : ""}`}
+              type="button"
+              aria-label={roundConfirm
+                ? text(`确认 ${displayIdentifier} 本轮执行`, `Confirm round for ${displayIdentifier}`)
+                : text(`完成 ${displayIdentifier}`, `Complete ${displayIdentifier}`)}
+              title={roundConfirm
+                ? text("确认本轮执行，议题回到等待认领等待下一次定时执行", "Confirm this round; the issue returns to Todo for its next scheduled run")
+                : label}
+              onClick={(event) => {
+                event.stopPropagation();
+                const card = event.currentTarget.closest<HTMLElement>(".task-card")!;
+                card.style.viewTransitionName = "completing-task";
+                const transition = document.startViewTransition(() => onComplete(task, roundConfirm ? "todo" : "done"));
+                void transition.finished.then(
+                  () => { card.style.viewTransitionName = `review-task-${task.id}`; },
+                  () => { card.style.viewTransitionName = `review-task-${task.id}`; },
+                );
+              }}
+            >
+              <img src={completeIcon} alt="" aria-hidden="true" />
+              <span>{label}</span>
+            </button>
+          );
+        })()}
         {variant === "sidebar" && (
           <span className="sidebar-card-creator">
             <AssigneeControl
@@ -555,6 +577,12 @@ export function TaskCard({
 
       {image && (
         <TaskCardMedia key={image} src={image} />
+      )}
+
+      {task.schedule && (
+        <span className="card-schedule-watermark" aria-hidden="true">
+          <RecurrenceIcon color="currentColor" size={96} />
+        </span>
       )}
 
       {showsProperties && (

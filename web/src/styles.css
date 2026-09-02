@@ -2370,6 +2370,46 @@ kbd {
   box-shadow: 0 3px 6px -2px rgba(0, 0, 0, 0.035), 0 1px 2px rgba(0, 0, 0, 0.055);
 }
 
+/* Scheduled issues: distinct tint, accent edge, and a large faint clock
+   watermark so they read at a glance as time-driven cards. */
+.task-card.has-schedule {
+  border-left: 3px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface));
+}
+
+.task-card.has-schedule:hover {
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface-raised));
+}
+
+/* Beats .task-card > :not(.task-card-open), which forces relative on card
+   children for badge positioning. */
+.task-card > span.card-schedule-watermark {
+  position: absolute;
+  right: -14px;
+  bottom: -18px;
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  opacity: 0.09;
+  pointer-events: none;
+  user-select: none;
+}
+
+.card-schedule-hint {
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: white;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: help;
+  flex: none;
+}
+
 .task-card.is-context-open {
   z-index: 1;
   border-color: var(--border-strong);
@@ -6669,6 +6709,15 @@ kbd {
   line-height: 1.5;
 }
 
+.schedule-note {
+  margin-top: 6px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1.6;
+  border-top: 0.5px solid var(--border);
+  padding-top: 6px;
+}
+
 .schedule-actions {
   display: flex;
   align-items: center;
@@ -9345,6 +9394,14 @@ kbd {
   line-height: 15px;
   cursor: pointer;
   pointer-events: auto;
+}
+
+/* The round-confirm label is longer than "Complete": let the pill grow. */
+.task-card-complete.is-round-confirm {
+  flex-basis: auto;
+  width: auto;
+  min-width: 88px;
+  padding: 0 12px;
 }
 
 .task-card.status-in_review:hover .task-card-complete {

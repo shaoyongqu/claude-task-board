@@ -10,7 +10,7 @@ import {
   buildTaskboardTaskRunPrompt,
   taskboardAutomationPolicyOperation,
 } from "../shared/taskboard-automation.mjs";
-import { nextScheduleOccurrence } from "../shared/schedule.mjs";
+import { dueDateDeadline, nextScheduleOccurrence } from "../shared/schedule.mjs";
 import {
   modelProfileEnvironment,
   modelProfileSettingsArg,
@@ -42,10 +42,11 @@ const SCHEDULE_SCAN_START_DELAY_MS = 5_000;
 // wait in a FIFO queue. Manual run-task executions and the per-project tick
 // loop (which claims at most one todo per tick) are not counted against it.
 const MAX_CONCURRENT_SCHEDULED_RUNS = 3;
-// Scheduled occurrences fire for issues in these statuses. backlog means not
-// scheduled for work, canceled abandons the issue, and blocked is an explicit
-// halt — occurrences in those states are skipped, not queued.
-const SCHEDULED_FIRE_STATUSES = new Set(["todo", "in_progress", "in_review", "done"]);
+// Scheduled issues live in exactly three statuses: todo, in_progress, and
+// in_review. Any other status (done, canceled, blocked, backlog) pauses the
+// schedule without consuming occurrences; reactivating the issue re-arms the
+// next occurrence from that moment.
+const SCHEDULED_FIRE_STATUSES = new Set(["todo", "in_progress", "in_review"]);
 const SCHEDULER_ACTOR = {
   type: "agent",
   id: "taskboard-scheduler",
@@ -166,6 +167,7 @@ export class LocalAutomationScheduler {
     const due = this.database.listDueScheduledTasks(new Date().toISOString());
     for (const task of due) {
       if (this.taskRuns.has(task.identifier) || this.queuedScheduleTaskIds.has(task.id)) continue;
+      if (this.#scheduledFireHoldReason(task)) continue;
       const blockReason = this.#scheduledFireBlockReason(task);
       if (blockReason) {
         this.#skipScheduledOccurrence(task, blockReason);
@@ -177,11 +179,27 @@ export class LocalAutomationScheduler {
     this.#drainScheduleQueue();
   }
 
-  // Why a due occurrence must not start right now. A live execution of the
-  // issue (manual run, auto-claimed controller, or an in-flight conversation
-  // run) means the occurrence is skipped — the issue is already being worked.
+  // Why a due occurrence is on hold: it must not fire AND must not be
+  // consumed — paused statuses keep their schedule, and an occurrence past
+  // the issue's due date waits for the date to be extended.
+  #scheduledFireHoldReason(task) {
+    if (!SCHEDULED_FIRE_STATUSES.has(task.status)) return `paused (${task.status})`;
+    if (
+      task.schedule.type !== "once"
+      && task.dueDate
+      && task.scheduleNextAt
+      && new Date(task.scheduleNextAt).getTime() > dueDateDeadline(task.dueDate)
+    ) {
+      return "next occurrence is past the due date";
+    }
+    return null;
+  }
+
+  // Why a due occurrence must not start right now but should still advance to
+  // its next occurrence: a live execution of the issue (manual run,
+  // auto-claimed controller, or an in-flight conversation run) means this
+  // occurrence is skipped — the issue is already being worked.
   #scheduledFireBlockReason(task) {
-    if (!SCHEDULED_FIRE_STATUSES.has(task.status)) return `status ${task.status}`;
     if (task.threadId && this.isThreadLive(task.threadId)) return "already executing";
     if (this.database.hasRunningAiChatRunForIssue(task.id)) return "already executing";
     const project = this.database.getProject(task.projectId);
@@ -218,6 +236,7 @@ export class LocalAutomationScheduler {
       this.queuedScheduleTaskIds.delete(taskId);
       const task = this.database.getTask(taskId);
       if (!task || task.scheduleNextAt === null || task.scheduleNextAt > new Date().toISOString()) continue;
+      if (this.#scheduledFireHoldReason(task)) continue;
       const blockReason = this.#scheduledFireBlockReason(task);
       if (blockReason) {
         this.#skipScheduledOccurrence(task, blockReason);
@@ -396,7 +415,9 @@ export class LocalAutomationScheduler {
       status: "todo",
       archived: "false",
     });
-    return tasks.length > 0;
+    // Scheduled issues are invisible to auto-claim: they fire on their own
+    // timetable, so claiming them would run them ahead of their time.
+    return tasks.some((task) => task.schedule === null);
   }
 
   #findEntry(request) {

@@ -4,10 +4,14 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import { DEFAULT_LABEL_NAMES, JIRA_PROJECT_ID } from "../shared/domain.mjs";
-import { nextScheduleOccurrence } from "../shared/schedule.mjs";
+import { dueDateDeadline, nextScheduleOccurrence } from "../shared/schedule.mjs";
 
 const DEFAULT_PROJECT_LABELS_JSON = JSON.stringify(DEFAULT_LABEL_NAMES);
 const TASK_TREE_MAX_NODES = 1_000;
+// Scheduled issues live in todo/in_progress/in_review; these statuses pause
+// firing while keeping the schedule configured (backlog additionally clears
+// it at the API layer — see the create/update guards below).
+const SCHEDULE_PAUSED_STATUSES = new Set(["backlog", "done", "canceled", "blocked"]);
 
 export class ApiError extends Error {
   constructor(status, code, message, details) {
@@ -2391,13 +2395,16 @@ export class TaskboardDatabase {
       const identifier = `${prefix}-${number}`;
       const id = randomUUID();
       const timestamp = now();
+      // A scheduled issue cannot sit in backlog; enabling a schedule from
+      // backlog lands it in todo instead.
+      const status = input.schedule && input.status === "backlog" ? "todo" : input.status;
       let sortOrder = input.sortOrder;
       if (sortOrder === undefined) {
         const row = this.database.prepare(`
           SELECT MIN(sort_order) AS minimum
           FROM tasks
           WHERE project_id = ? AND status = ? AND archived_at IS NULL
-        `).get(input.projectId, input.status);
+        `).get(input.projectId, status);
         sortOrder = row.minimum === null ? 1000 : row.minimum - 1000;
       }
 
@@ -2428,7 +2435,7 @@ export class TaskboardDatabase {
         input.projectId,
         input.title,
         input.description,
-        input.status,
+        status,
         input.priority,
         JSON.stringify(input.labels),
         sortOrder,
@@ -2465,7 +2472,6 @@ export class TaskboardDatabase {
   updateTask(id, version, changes, threadId, threadBinding, actor) {
     const current = this.#requireTask(id);
     this.#requireVersion(current, version);
-    const activityChanges = taskFieldChanges(current, changes);
     const targetProject = Object.hasOwn(changes, "projectId")
       ? this.database.prepare("SELECT id, name, workspace_path, labels FROM projects WHERE id = ?").get(changes.projectId)
       : null;
@@ -2504,6 +2510,20 @@ export class TaskboardDatabase {
     if (schedule && schedule.type !== "once" && !dueDate) {
       throw new ApiError(400, "INVALID_FIELD", "A scheduled issue requires a due date");
     }
+    // Scheduled issues never rest in backlog. Freshly enabling a schedule
+    // forces the issue into todo; conversely a plain move to backlog (a
+    // whole-draft PATCH re-sends an unchanged schedule) clears the schedule.
+    const scheduleChanged = Object.hasOwn(changes, "schedule")
+      && JSON.stringify(changes.schedule) !== JSON.stringify(current.schedule);
+    const finalStatus = Object.hasOwn(changes, "status") ? changes.status : current.status;
+    if (schedule && finalStatus === "backlog") {
+      if (scheduleChanged) {
+        changes.status = "todo";
+      } else {
+        changes.schedule = null;
+      }
+    }
+    const activityChanges = taskFieldChanges(current, changes);
 
     const columns = {
       projectId: "project_id",
@@ -2661,20 +2681,39 @@ export class TaskboardDatabase {
       ? `thread_id = ?, thread_codex_project_id = ?, thread_codex_project_kind = ?,
         thread_codex_host_id = ?, thread_workspace_path = ?,`
       : "";
+    // Schedule lifecycle on moves: entering backlog clears the schedule;
+    // leaving a paused status (done/canceled/blocked/backlog) re-arms the next
+    // occurrence from the reactivation moment.
+    let scheduleAssignment = "";
+    const scheduleValues = [];
+    let scheduleActivity = null;
+    if (current.schedule && status === "backlog") {
+      scheduleAssignment = "schedule_config = NULL, schedule_next_at = NULL,";
+      scheduleActivity = { field: "schedule", before: current.schedule, after: null };
+    } else if (
+      current.schedule
+      && SCHEDULE_PAUSED_STATUSES.has(current.status)
+      && !SCHEDULE_PAUSED_STATUSES.has(status)
+    ) {
+      scheduleAssignment = "schedule_next_at = ?,";
+      scheduleValues.push(scheduleNextAtIso(current.schedule));
+    }
     this.database.exec("BEGIN IMMEDIATE");
     try {
       const result = this.database.prepare(`
         UPDATE tasks
-        SET status = ?, sort_order = ?, ${threadAssignment} version = version + 1, updated_at = ?
+        SET status = ?, sort_order = ?, ${scheduleAssignment} ${threadAssignment} version = version + 1, updated_at = ?
         WHERE id = ? AND version = ?
-      `).run(status, sortOrder, ...(storedBinding ?? []), timestamp, current.id, version);
+      `).run(status, sortOrder, ...scheduleValues, ...(storedBinding ?? []), timestamp, current.id, version);
       if (result.changes !== 1) {
         this.#throwMissingOrConflict(id, version);
       }
       this.#recordTaskActivity(
         current.id,
         actor,
-        taskFieldChanges(current, { status }),
+        scheduleActivity
+          ? [...taskFieldChanges(current, { status }), scheduleActivity]
+          : taskFieldChanges(current, { status }),
         timestamp,
       );
       this.database.exec("COMMIT");
@@ -2698,7 +2737,7 @@ export class TaskboardDatabase {
     try {
       const result = this.database.prepare(`
         UPDATE tasks
-        SET archived_at = ?, schedule_config = NULL, schedule_next_at = NULL, ${threadAssignment} version = version + 1, updated_at = ?
+        SET archived_at = ?, ${threadAssignment} version = version + 1, updated_at = ?
         WHERE id = ? AND version = ?
       `).run(timestamp, ...(storedBinding ?? []), timestamp, current.id, version);
       if (result.changes !== 1) {
@@ -2730,13 +2769,23 @@ export class TaskboardDatabase {
       ? `thread_id = ?, thread_codex_project_id = ?, thread_codex_project_kind = ?,
         thread_codex_host_id = ?, thread_workspace_path = ?,`
       : "";
+    // Restoring a scheduled issue re-enables it: the next occurrence waits
+    // from the restore moment rather than firing immediately for time lost
+    // while it was archived.
+    const scheduleAssignment = current.schedule ? "schedule_next_at = ?," : "";
     this.database.exec("BEGIN IMMEDIATE");
     try {
       const result = this.database.prepare(`
         UPDATE tasks
-        SET archived_at = NULL, ${threadAssignment} version = version + 1, updated_at = ?
+        SET archived_at = NULL, ${scheduleAssignment} ${threadAssignment} version = version + 1, updated_at = ?
         WHERE id = ? AND version = ?
-      `).run(...(storedBinding ?? []), timestamp, current.id, version);
+      `).run(
+        ...(current.schedule ? [scheduleNextAtIso(current.schedule)] : []),
+        ...(storedBinding ?? []),
+        timestamp,
+        current.id,
+        version,
+      );
       if (result.changes !== 1) {
         this.#throwMissingOrConflict(id, version);
       }

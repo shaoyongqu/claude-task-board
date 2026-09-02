@@ -189,6 +189,13 @@ export function ScheduleEditor({ schedule, dueDate, onApply, onClose }: Schedule
         </div>
       )}
 
+      <div className="schedule-note">
+        {text(
+          "定时议题在 等待认领、处理中、等你确认 之间流转：到约定时间自动执行，超出截止时间后暂停等待；不会被自动认领；确认本轮后回到等待认领等待下一次；每轮执行相互独立；移入待立项会取消定时设置。",
+          "Scheduled issues cycle through Todo / In Progress / In Review: they fire automatically at the configured time, pause past the due date, are never auto-claimed, return to Todo after each confirmed round, run one independent round per fire, and lose their schedule if moved to Backlog.",
+        )}
+      </div>
+
       <div className="schedule-actions">
         {schedule && (
           <button

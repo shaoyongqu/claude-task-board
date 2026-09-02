@@ -669,6 +669,36 @@ function taskToDraft(task: Task): TaskDraft {
   };
 }
 
+// The server keeps scheduled issues out of backlog (and out of the paused
+// statuses' way); surface those automatic adjustments to the user.
+function announceScheduleAdjustments(
+  previous: Task,
+  changes: Partial<TaskDraft>,
+  updated: Task,
+  announce: (chinese: string, english: string) => void,
+) {
+  const intendedStatus = changes.status ?? previous.status;
+  if (intendedStatus === "backlog" && updated.status === "todo" && updated.schedule) {
+    announce(
+      "已开启定时执行，议题自动从待立项移入等待认领。",
+      "Schedule enabled: the issue moved from Backlog to Todo automatically.",
+    );
+    return;
+  }
+  if (
+    intendedStatus === "backlog"
+    && updated.status === "backlog"
+    && previous.schedule
+    && updated.schedule === null
+    && changes.schedule === undefined
+  ) {
+    announce(
+      "议题移入待立项，定时执行设置已自动取消。",
+      "Moved to Backlog: the schedule was cleared automatically.",
+    );
+  }
+}
+
 interface LocalRealtimeSyncProps {
   selectedProjectId: string;
   detailTaskId: string | null;
@@ -2733,6 +2763,12 @@ export function App() {
       setTasks((current) => sortTasks(current.map((candidate) =>
         candidate.id === moved.id ? moved : candidate,
       )));
+      if (status === "backlog" && task.schedule && moved.schedule === null) {
+        setAnnouncement(textRef.current(
+          "议题移入待立项，定时执行设置已自动取消。",
+          "Moved to Backlog: the schedule was cleared automatically.",
+        ));
+      }
       pushUndo(null, async () => {
         const candidate = tasksRef.current.find((current) => current.id === moved.id);
         const current = candidate && candidate.version >= moved.version ? candidate : moved;
@@ -2814,6 +2850,9 @@ export function App() {
       setTasks((current) => sortTasks(current.map((candidate) =>
         candidate.id === updated.id ? updated : candidate,
       )));
+      announceScheduleAdjustments(task, changes, updated, (chinese, english) => (
+        setAnnouncement(textRef.current(chinese, english))
+      ));
       const previousAssigneeTarget = assigneeTargetForActor(previous.assignee, currentUser);
       if (!assigneeTarget || previousAssigneeTarget) {
         pushUndo(
@@ -4190,7 +4229,7 @@ export function App() {
                         onCreate={(initialStatus) => setEditor({ task: null, status: initialStatus })}
                         onEdit={openTaskDetail}
                         onUpdate={updateTaskProperties}
-                        onComplete={(task) => moveTask(task, "done")}
+                        onComplete={(task, status) => moveTask(task, status)}
                         onTerminateExecution={(task) => void terminateTaskExecution(task)}
                         onContextMenu={openTaskContextMenu}
                         onDragStart={startTaskDrag}
