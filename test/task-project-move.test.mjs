@@ -47,7 +47,6 @@ function createTask(database, projectId, title, overrides = {}) {
     developmentContext: null,
     startDate: null,
     dueDate: null,
-    recurrence: null,
     ...overrides,
   });
 }

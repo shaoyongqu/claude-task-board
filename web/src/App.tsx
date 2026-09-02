@@ -662,7 +662,6 @@ function taskToDraft(task: Task): TaskDraft {
     developmentContext: task.developmentContext,
     startDate: task.startDate,
     dueDate: task.dueDate,
-    recurrence: task.recurrence,
     schedule: task.schedule,
     modelProfileId: task.modelProfileId,
     reasoningEffort: task.reasoningEffort,

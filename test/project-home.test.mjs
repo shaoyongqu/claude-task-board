@@ -64,8 +64,8 @@ test("the issue composer includes Linear-style labels and scheduling", () => {
   assert.match(editorSource, /<LabelPicker/);
   assert.match(labelPickerSource, /text\(`创建 “\$\{normalizedSearch\}”`, `Create “\$\{normalizedSearch\}”`\)/);
   assert.match(editorSource, /设置截止日期/);
-  assert.match(editorSource, /设置重复/);
-  assert.match(editorSource, /最早截止日期/);
+  assert.match(editorSource, /定时执行…/);
+  assert.doesNotMatch(editorSource, /设置重复|最早截止日期/);
   assert.match(editorSource, /developmentScan\.contexts/);
 });
 

@@ -280,9 +280,9 @@ function taskFromRow(row) {
     developmentContext,
     startDate: row.start_date,
     dueDate: row.due_date,
-    recurrence: row.recurrence_interval && row.recurrence_unit
-      ? { interval: row.recurrence_interval, unit: row.recurrence_unit }
-      : null,
+    // The legacy "recurrence" display attribute was replaced by schedules; its
+    // columns stay in the schema so old rows remain intact, but it is no
+    // longer part of the API payload.
     schedule: row.schedule_config ? JSON.parse(row.schedule_config) : null,
     scheduleNextAt: row.schedule_next_at ?? null,
     scheduleLastRunAt: row.schedule_last_run_at ?? null,
@@ -2424,11 +2424,11 @@ export class TaskboardDatabase {
           creator_type, creator_id, creator_name, creator_avatar_url,
           assignee_type, assignee_id, assignee_name, assignee_avatar_url,
           git_branch, worktree_path, worktree_branch,
-          start_date, due_date, recurrence_interval, recurrence_unit,
+          start_date, due_date,
           schedule_config, schedule_next_at,
           model_profile_id,
           archived_at, version, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1, ?, ?)
       `).run(
         id,
         identifier,
@@ -2453,8 +2453,6 @@ export class TaskboardDatabase {
         input.developmentContext?.type === "worktree" ? input.developmentContext.branch : null,
         input.startDate,
         input.dueDate,
-        input.recurrence?.interval ?? null,
-        input.recurrence?.unit ?? null,
         input.schedule ? JSON.stringify(input.schedule) : null,
         scheduleNextAtIso(input.schedule),
         input.modelProfileId ?? null,
@@ -2502,10 +2500,6 @@ export class TaskboardDatabase {
       }
     }
     const dueDate = Object.hasOwn(changes, "dueDate") ? changes.dueDate : current.dueDate;
-    const recurrence = Object.hasOwn(changes, "recurrence") ? changes.recurrence : current.recurrence;
-    if (recurrence && !dueDate) {
-      throw new ApiError(400, "INVALID_FIELD", "A recurring issue requires a due date");
-    }
     const schedule = Object.hasOwn(changes, "schedule") ? changes.schedule : current.schedule;
     if (schedule && schedule.type !== "once" && !dueDate) {
       throw new ApiError(400, "INVALID_FIELD", "A scheduled issue requires a due date");
@@ -2547,11 +2541,6 @@ export class TaskboardDatabase {
           value?.type === "worktree" ? value.path : null,
           value?.type === "worktree" ? value.branch : null,
         );
-        continue;
-      }
-      if (key === "recurrence") {
-        assignments.push("recurrence_interval = ?", "recurrence_unit = ?");
-        values.push(value?.interval ?? null, value?.unit ?? null);
         continue;
       }
       if (key === "schedule") {

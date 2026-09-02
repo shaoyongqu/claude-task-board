@@ -15,7 +15,6 @@ import {
   type DevelopmentContext,
   type DevelopmentScan,
   type ModelProfile,
-  type Recurrence,
   type Schedule,
   type Task,
   type TaskDraft,
@@ -61,21 +60,6 @@ import { TaskboardIcon } from "./TaskboardIcon";
 import { ScheduleEditor } from "./ScheduleEditor";
 import { describeSchedule, scheduleIsPeriodic } from "../schedule";
 
-const RECURRENCE_UNITS: Record<TaskboardLanguage, Record<Recurrence["unit"], string>> = {
-  zh: {
-    day: "天",
-    week: "周",
-    month: "月",
-    year: "年",
-  },
-  en: {
-    day: "day",
-    week: "week",
-    month: "month",
-    year: "year",
-  },
-};
-
 type TaskEditorError = string | readonly [string, string];
 type DraftRelationMenu = "parent" | "related" | "subIssue";
 
@@ -100,7 +84,6 @@ export interface NewTaskEditorDraft {
   developmentContext: DevelopmentContext | null;
   startDate: string;
   dueDate: string;
-  recurrence: Recurrence | null;
   schedule: Schedule | null;
   modelProfileId: string | null;
   attachments: File[];
@@ -205,7 +188,6 @@ export function TaskEditor({
   const [developmentContext, setDevelopmentContext] = useState<DevelopmentContext | null>(task?.developmentContext ?? initialDraft?.developmentContext ?? null);
   const [startDate] = useState(task?.startDate ?? initialDraft?.startDate ?? "");
   const [dueDate, setDueDate] = useState(task?.dueDate ?? initialDraft?.dueDate ?? "");
-  const [recurrence, setRecurrence] = useState<Recurrence | null>(task?.recurrence ?? initialDraft?.recurrence ?? null);
   const [schedule, setSchedule] = useState<Schedule | null>(task?.schedule ?? initialDraft?.schedule ?? null);
   const [modelProfileId, setModelProfileId] = useState<string | null>(
     task?.modelProfileId ?? initialDraft?.modelProfileId ?? null,
@@ -214,7 +196,7 @@ export function TaskEditor({
   const [relatedIds, setRelatedIds] = useState<string[]>(initialDraft?.relations.relatedIds ?? []);
   const [subIssueIds, setSubIssueIds] = useState<string[]>(initialDraft?.relations.subIssueIds ?? []);
   const [createMore, setCreateMore] = useState(false);
-  const [menu, setMenu] = useState<"project" | "status" | "priority" | "assignee" | "labels" | "development" | "more" | "due" | "recurrence" | "schedule" | "modelProfile" | null>(null);
+  const [menu, setMenu] = useState<"project" | "status" | "priority" | "assignee" | "labels" | "development" | "more" | "due" | "schedule" | "modelProfile" | null>(null);
   const [relationMenu, setRelationMenu] = useState<DraftRelationMenu | null>(null);
   const [moreMenuPosition, setMoreMenuPosition] = useState<{ right: number; bottom: number } | null>(null);
   const [expanded, setExpanded] = useState(false);
@@ -300,7 +282,7 @@ export function TaskEditor({
   }, []);
 
   useEffect(() => {
-    if (menu !== "more" && menu !== "due" && menu !== "recurrence" && menu !== "schedule") return;
+    if (menu !== "more" && menu !== "due" && menu !== "schedule") return;
     const closeFromOutside = (event: PointerEvent) => {
       if (!moreMenuRef.current?.contains(event.target as Node)) setMenu(null);
     };
@@ -387,13 +369,6 @@ export function TaskEditor({
       titleRef.current?.focus();
       return;
     }
-    if (recurrence && !dueDate) {
-      setError([
-        "重复议题需要先设置最早截止日期。",
-        "A recurring issue needs an initial due date.",
-      ]);
-      return;
-    }
     if (scheduleIsPeriodic(schedule) && !dueDate) {
       setError([
         "周期定时执行需要先设置截止日期。",
@@ -421,7 +396,6 @@ export function TaskEditor({
         developmentContext,
         startDate: startDate || null,
         dueDate: dueDate || null,
-        recurrence,
         schedule,
         modelProfileId,
       }, attachments, inlineMediaImages(descriptionSegments), task ? undefined : {
@@ -502,7 +476,6 @@ export function TaskEditor({
       developmentContext,
       startDate,
       dueDate,
-      recurrence,
       schedule,
       modelProfileId,
       attachments,
@@ -753,14 +726,6 @@ export function TaskEditor({
                 )}</span>
               </button>
             )}
-            {recurrence && (
-              <button className="property-control" type="button" onClick={() => setMenu("recurrence")}>
-                <span>{text(
-                  `每 ${recurrence.interval} ${RECURRENCE_UNITS.zh[recurrence.unit]}`,
-                  `Every ${recurrence.interval} ${RECURRENCE_UNITS.en[recurrence.unit]}${recurrence.interval === 1 ? "" : "s"}`,
-                )}</span>
-              </button>
-            )}
             {schedule && (
               <button className="property-control" type="button" onClick={() => setMenu("schedule")}>
                 <span>{text(
@@ -816,7 +781,6 @@ export function TaskEditor({
                   } : undefined}
                 >
                   <button type="button" onClick={() => setMenu("due")}><span><DueDateIcon color="currentColor" /></span><strong>{text("设置截止日期", "Set due date")}</strong><kbd>⇧ D</kbd><b><LinearIcon name="chevronRight" /></b></button>
-                  <button type="button" onClick={() => setMenu("recurrence")}><span><RecurrenceIcon color="currentColor" /></span><strong>{text("设置重复…", "Set recurrence…")}</strong><b><LinearIcon name="chevronRight" /></b></button>
                   <button type="button" onClick={() => setMenu("schedule")}><span><RecurrenceIcon color="currentColor" /></span><strong>{text("定时执行…", "Scheduled execution…")}</strong><b><LinearIcon name="chevronRight" /></b></button>
                   {!task && (
                     <>
@@ -845,15 +809,7 @@ export function TaskEditor({
                   <button type="button" onClick={() => chooseDueDate(dateFromNow(1))}><strong>{text("明天", "Tomorrow")}</strong><span>{displayDate(dateFromNow(1), locale)}</span></button>
                   <button type="button" onClick={() => chooseDueDate(endOfWeek())}><strong>{text("本周结束", "End of this week")}</strong><span>{displayDate(endOfWeek(), locale)}</span></button>
                   <button type="button" onClick={() => chooseDueDate(dateFromNow(7))}><strong>{text("一周后", "In one week")}</strong><span>{displayDate(dateFromNow(7), locale)}</span></button>
-                  {dueDate && <button className="destructive-menu-row" type="button" onClick={() => { setDueDate(""); setRecurrence(null); if (scheduleIsPeriodic(schedule)) setSchedule(null); setMenu(null); }}>{text("清除截止日期", "Clear due date")}</button>}
-                </div>
-              )}
-              {menu === "recurrence" && (
-                <div className="composer-popover recurrence-popover">
-                  <label><span>{text("最早截止日期", "Initial due date")}</span><input type="date" value={dueDate || dateFromNow(7)} onChange={(event) => setDueDate(event.target.value)} /></label>
-                  <label><span>{text("重复频率", "Repeat frequency")}</span><span className="recurrence-controls"><input type="number" min="1" max="365" value={recurrence?.interval ?? 1} onChange={(event) => setRecurrence({ interval: Number(event.target.value), unit: recurrence?.unit ?? "week" })} /><select value={recurrence?.unit ?? "week"} onChange={(event) => setRecurrence({ interval: recurrence?.interval ?? 1, unit: event.target.value as Recurrence["unit"] })}>{Object.entries(RECURRENCE_UNITS[language]).map(([unit, label]) => <option value={unit} key={unit}>{label}</option>)}</select></span></label>
-                  <button className="recurrence-save" type="button" onClick={() => { if (!dueDate) setDueDate(dateFromNow(7)); if (!recurrence) setRecurrence({ interval: 1, unit: "week" }); setMenu(null); }}>{text("设置重复", "Set recurrence")}</button>
-                  {recurrence && <button className="destructive-menu-row" type="button" onClick={() => { setRecurrence(null); setMenu(null); }}>{text("清除重复", "Clear recurrence")}</button>}
+                  {dueDate && <button className="destructive-menu-row" type="button" onClick={() => { setDueDate(""); if (scheduleIsPeriodic(schedule)) setSchedule(null); setMenu(null); }}>{text("清除截止日期", "Clear due date")}</button>}
                 </div>
               )}
               {menu === "schedule" && (

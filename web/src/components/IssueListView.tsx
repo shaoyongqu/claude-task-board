@@ -139,7 +139,6 @@ export function IssueListView({
                                   ...(event.target.value
                                     ? {}
                                     : {
-                                      recurrence: null,
                                       ...(scheduleIsPeriodic(task.schedule) ? { schedule: null } : {}),
                                     }),
                                 }).catch(() => {})}

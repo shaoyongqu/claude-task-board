@@ -27,6 +27,8 @@ export type DevelopmentContext =
   | { type: "branch"; branch: string }
   | { type: "worktree"; path: string; branch: string | null };
 
+// Legacy display attribute replaced by Schedule; still used to render
+// historical activity records.
 export type Recurrence = {
   interval: number;
   unit: "day" | "week" | "month" | "year";
@@ -474,7 +476,6 @@ export interface Task {
   developmentContext: DevelopmentContext | null;
   startDate: string | null;
   dueDate: string | null;
-  recurrence: Recurrence | null;
   schedule: Schedule | null;
   scheduleNextAt: string | null;
   scheduleLastRunAt: string | null;
@@ -581,7 +582,6 @@ export interface TaskDraft {
   developmentContext: DevelopmentContext | null;
   startDate: string | null;
   dueDate: string | null;
-  recurrence: Recurrence | null;
   schedule: Schedule | null;
   modelProfileId?: string | null;
   reasoningEffort?: string | null;

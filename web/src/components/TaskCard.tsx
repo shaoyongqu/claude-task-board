@@ -623,7 +623,7 @@ export function TaskCard({
                 dueDate,
                 ...(dueDate
                   ? {}
-                  : { recurrence: null, ...(scheduleIsPeriodic(task.schedule) ? { schedule: null } : {}) }),
+                  : { ...(scheduleIsPeriodic(task.schedule) ? { schedule: null } : {}) }),
               }, "dueDate")}
             />
           )}

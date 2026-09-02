@@ -425,19 +425,6 @@ function parseDevelopmentContext(value) {
   throw new ApiError(400, "INVALID_FIELD", "'developmentContext.type' must be branch or worktree");
 }
 
-function parseRecurrence(value) {
-  if (value === null) return null;
-  assertPlainObject(value);
-  assertAllowedKeys(value, new Set(["interval", "unit"]));
-  if (!Number.isSafeInteger(value.interval) || value.interval < 1 || value.interval > 365) {
-    throw new ApiError(400, "INVALID_FIELD", "'recurrence.interval' must be an integer from 1 to 365");
-  }
-  if (!["day", "week", "month", "year"].includes(value.unit)) {
-    throw new ApiError(400, "INVALID_FIELD", "'recurrence.unit' must be day, week, month, or year");
-  }
-  return { interval: value.interval, unit: value.unit };
-}
-
 function parseSchedule(value) {
   if (value === null) return null;
   const parsed = parseScheduleConfig(value);
@@ -679,7 +666,7 @@ function parseTaskCreate(body) {
   assertPlainObject(body);
   assertAllowedKeys(body, new Set([
     "projectId", "title", "description", "status", "priority", "labels", "sortOrder", "threadId", "threadBinding",
-    "assigneeTarget", "developmentContext", "startDate", "dueDate", "recurrence", "schedule", "modelProfileId",
+    "assigneeTarget", "developmentContext", "startDate", "dueDate", "schedule", "modelProfileId",
   ]));
   const projectId = validateProjectId(body.projectId ?? DEFAULT_PROJECT_ID);
   const task = {
@@ -696,13 +683,9 @@ function parseTaskCreate(body) {
     developmentContext: parseDevelopmentContext(body.developmentContext ?? null),
     startDate: parseDueDate(body.startDate ?? null, "startDate"),
     dueDate: parseDueDate(body.dueDate ?? null),
-    recurrence: parseRecurrence(body.recurrence ?? null),
     schedule: parseSchedule(body.schedule ?? null),
     modelProfileId: parseOptionalModelProfileId(body.modelProfileId) ?? null,
   };
-  if (task.recurrence && !task.dueDate) {
-    throw new ApiError(400, "INVALID_FIELD", "A recurring issue requires 'dueDate'");
-  }
   if (task.schedule && task.schedule.type !== "once" && !task.dueDate) {
     throw new ApiError(400, "INVALID_FIELD", "A scheduled issue requires 'dueDate'");
   }
@@ -713,7 +696,7 @@ function parseTaskPatch(body) {
   assertPlainObject(body);
   assertAllowedKeys(body, new Set([
     "version", "projectId", "title", "description", "status", "priority", "labels", "threadId", "threadBinding",
-    "assigneeTarget", "developmentContext", "startDate", "dueDate", "recurrence", "schedule", "modelProfileId",
+    "assigneeTarget", "developmentContext", "startDate", "dueDate", "schedule", "modelProfileId",
     "reasoningEffort",
   ]));
   const version = parseVersion(body.version);
@@ -730,16 +713,12 @@ function parseTaskPatch(body) {
   if (body.developmentContext !== undefined) changes.developmentContext = parseDevelopmentContext(body.developmentContext);
   if (body.startDate !== undefined) changes.startDate = parseDueDate(body.startDate, "startDate");
   if (body.dueDate !== undefined) changes.dueDate = parseDueDate(body.dueDate);
-  if (body.recurrence !== undefined) changes.recurrence = parseRecurrence(body.recurrence);
   if (body.schedule !== undefined) changes.schedule = parseSchedule(body.schedule);
   if (body.modelProfileId !== undefined) {
     changes.modelProfileId = parseOptionalModelProfileId(body.modelProfileId) ?? null;
   }
   if (body.reasoningEffort !== undefined) {
     changes.reasoningEffort = parseTaskReasoningEffort(body.reasoningEffort);
-  }
-  if (changes.recurrence && body.dueDate === null) {
-    throw new ApiError(400, "INVALID_FIELD", "A recurring issue requires 'dueDate'");
   }
   if (changes.schedule && changes.schedule.type !== "once" && body.dueDate === null) {
     throw new ApiError(400, "INVALID_FIELD", "A scheduled issue requires 'dueDate'");
@@ -3700,11 +3679,11 @@ export function createTaskboardServer(options = {}) {
               );
             }
             const dueDate = Object.hasOwn(changes, "dueDate") ? changes.dueDate : current.dueDate;
-            const recurrence = Object.hasOwn(changes, "recurrence")
-              ? changes.recurrence
-              : current.recurrence;
-            if (recurrence && !dueDate) {
-              throw new ApiError(400, "INVALID_FIELD", "A recurring issue requires a due date");
+            const schedule = Object.hasOwn(changes, "schedule")
+              ? changes.schedule
+              : current.schedule;
+            if (schedule && schedule.type !== "once" && !dueDate) {
+              throw new ApiError(400, "INVALID_FIELD", "A scheduled issue requires a due date");
             }
             jiraChanged = await jira.updateTask(current, changes);
           }

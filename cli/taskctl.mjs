@@ -55,8 +55,6 @@ const COMMAND_OPTIONS = new Map([
       "worktree-branch",
       "start-date",
       "due-date",
-      "recurrence-interval",
-      "recurrence-unit",
       "json",
     ]),
   ],
@@ -76,8 +74,6 @@ const COMMAND_OPTIONS = new Map([
       "worktree-branch",
       "start-date",
       "due-date",
-      "recurrence-interval",
-      "recurrence-unit",
       "if-version",
       "json",
     ]),
@@ -160,8 +156,7 @@ Actions:
     [--status STATUS] [--priority PRIORITY] [--labels a,b]
     [--thread-id ID]
     [--git-branch BRANCH | --worktree-path PATH [--worktree-branch BRANCH]]
-    [--start-date YYYY-MM-DD] [--due-date YYYY-MM-DD]
-    [--recurrence-interval N --recurrence-unit day|week|month|year] [--json]
+    [--start-date YYYY-MM-DD] [--due-date YYYY-MM-DD] [--json]
   update ISSUE_ID
     [--project PROJECT_ID] [--title TITLE]
     [--description TEXT | --description-file FILE]
@@ -169,7 +164,6 @@ Actions:
     [--thread-id ID]
     [--git-branch BRANCH | --worktree-path PATH [--worktree-branch BRANCH]]
     [--start-date YYYY-MM-DD] [--due-date YYYY-MM-DD]
-    [--recurrence-interval N --recurrence-unit day|week|month|year]
     [--if-version N] [--json]
   move ISSUE_ID --status STATUS [--thread-id ID]
     [--binding-thread-id ID
@@ -869,7 +863,6 @@ async function createIssue(api, options, overrides) {
   assertPriority(priority);
 
   const developmentContext = developmentContextFromOptions(options, overrides);
-  const recurrence = recurrenceFromOptions(options);
   const threadId = resolveThreadId(options, overrides);
   return api.request("POST", "/api/tasks", {
     projectId: requiredOption(options, "project"),
@@ -882,7 +875,6 @@ async function createIssue(api, options, overrides) {
     ...optionalField("developmentContext", developmentContext),
     ...optionalField("startDate", options["start-date"]),
     ...optionalField("dueDate", options["due-date"]),
-    ...optionalField("recurrence", recurrence),
   });
 }
 
@@ -891,7 +883,6 @@ async function updateIssue(api, taskId, options, overrides) {
   if (options.priority !== undefined) assertPriority(options.priority);
 
   const developmentContext = developmentContextFromOptions(options, overrides);
-  const recurrence = recurrenceFromOptions(options);
   const threadId = resolveThreadId(options, overrides);
   const patch = {
     ...optionalField("projectId", options.project),
@@ -902,7 +893,6 @@ async function updateIssue(api, taskId, options, overrides) {
     ...optionalField("developmentContext", developmentContext),
     ...optionalField("startDate", options["start-date"]),
     ...optionalField("dueDate", options["due-date"]),
-    ...optionalField("recurrence", recurrence),
   };
   if (options.description !== undefined || options["description-file"] !== undefined) {
     patch.description = await resolveDescription(options, overrides);
@@ -1105,23 +1095,6 @@ function developmentContextFromOptions(options, overrides) {
     };
   }
   return undefined;
-}
-
-function recurrenceFromOptions(options) {
-  const rawInterval = options["recurrence-interval"];
-  const unit = options["recurrence-unit"];
-  if (rawInterval === undefined && unit === undefined) return undefined;
-  if (rawInterval === undefined || unit === undefined) {
-    throw usageError("Use --recurrence-interval and --recurrence-unit together");
-  }
-  const interval = Number(rawInterval);
-  if (!Number.isSafeInteger(interval) || interval < 1 || interval > 365) {
-    throw usageError("--recurrence-interval must be an integer from 1 to 365");
-  }
-  if (!["day", "week", "month", "year"].includes(unit)) {
-    throw usageError("--recurrence-unit must be day, week, month, or year");
-  }
-  return { interval, unit };
 }
 
 function resolveThreadId(options, overrides) {

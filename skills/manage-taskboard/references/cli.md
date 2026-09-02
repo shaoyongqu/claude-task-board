@@ -80,7 +80,6 @@ taskctl issue create \
   [--worktree-branch BRANCH] \
   [--start-date YYYY-MM-DD] \
   [--due-date YYYY-MM-DD] \
-  [--recurrence-interval N --recurrence-unit day|week|month|year] \
   [--json]
 ```
 
@@ -106,7 +105,6 @@ taskctl issue update ID \
   [--worktree-branch BRANCH] \
   [--start-date YYYY-MM-DD] \
   [--due-date YYYY-MM-DD] \
-  [--recurrence-interval N --recurrence-unit day|week|month|year] \
   [--if-version N] \
   [--json]
 

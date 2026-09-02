@@ -249,27 +249,6 @@ function parseDueDate(value, name = "dueDate") {
   return date;
 }
 
-function parseRecurrence(value) {
-  if (value === null) return null;
-  assertPlainObject(value);
-  assertAllowedKeys(value, new Set(["interval", "unit"]));
-  if (!Number.isSafeInteger(value.interval) || value.interval < 1 || value.interval > 365) {
-    throw new ApiError(
-      400,
-      "INVALID_FIELD",
-      "'recurrence.interval' must be an integer from 1 to 365",
-    );
-  }
-  if (!["day", "week", "month", "year"].includes(value.unit)) {
-    throw new ApiError(
-      400,
-      "INVALID_FIELD",
-      "'recurrence.unit' must be day, week, month, or year",
-    );
-  }
-  return { interval: value.interval, unit: value.unit };
-}
-
 function parseDevelopmentContext(value) {
   if (value === null) return null;
   assertPlainObject(value);
@@ -900,9 +879,6 @@ function taskFromRow(row) {
     developmentContext: developmentContextFromRow(row),
     startDate: row.start_date,
     dueDate: row.due_date,
-    recurrence: row.recurrence_interval && row.recurrence_unit
-      ? { interval: row.recurrence_interval, unit: row.recurrence_unit }
-      : null,
     archivedAt: row.archived_at,
     version: row.version,
     createdAt: row.created_at,
@@ -1339,7 +1315,6 @@ function parseTaskCreate(body) {
     "developmentContext",
     "startDate",
     "dueDate",
-    "recurrence",
   ]));
   const input = {
     projectId: validateProjectId(body.projectId ?? "local"),
@@ -1355,11 +1330,7 @@ function parseTaskCreate(body) {
     developmentContext: parseDevelopmentContext(body.developmentContext ?? null),
     startDate: parseDueDate(body.startDate ?? null, "startDate"),
     dueDate: parseDueDate(body.dueDate ?? null),
-    recurrence: parseRecurrence(body.recurrence ?? null),
   };
-  if (input.recurrence && !input.dueDate) {
-    throw new ApiError(400, "INVALID_FIELD", "A recurring issue requires 'dueDate'");
-  }
   return input;
 }
 
@@ -1379,7 +1350,6 @@ function parseTaskPatch(body) {
     "developmentContext",
     "startDate",
     "dueDate",
-    "recurrence",
   ]));
   const changes = {};
   if (body.projectId !== undefined) changes.projectId = validateProjectId(body.projectId);
@@ -1397,7 +1367,6 @@ function parseTaskPatch(body) {
   }
   if (body.startDate !== undefined) changes.startDate = parseDueDate(body.startDate, "startDate");
   if (body.dueDate !== undefined) changes.dueDate = parseDueDate(body.dueDate);
-  if (body.recurrence !== undefined) changes.recurrence = parseRecurrence(body.recurrence);
   const assigneeTarget = parseAssigneeTarget(body.assigneeTarget);
   if (Object.keys(changes).length === 0 && assigneeTarget === undefined) {
     throw new ApiError(400, "INVALID_BODY", "PATCH requires at least one task field");
@@ -1781,7 +1750,7 @@ async function createTask(env, input, actor) {
         creator_type, creator_id, creator_name, creator_avatar_url,
         assignee_type, assignee_id, assignee_name, assignee_avatar_url,
         development_context_type, development_branch,
-        start_date, due_date, recurrence_interval, recurrence_unit,
+        start_date, due_date,
         archived_at, version, created_at, updated_at
       )
       SELECT
@@ -1800,7 +1769,7 @@ async function createTask(env, input, actor) {
         ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?,
-        ?, ?, ?, ?,
+        ?, ?,
         NULL, 1, ?, ?
       FROM projects
       WHERE projects.id = ?
@@ -1828,8 +1797,6 @@ async function createTask(env, input, actor) {
       input.developmentContext?.branch ?? null,
       input.startDate,
       input.dueDate,
-      input.recurrence?.interval ?? null,
-      input.recurrence?.unit ?? null,
       timestamp,
       timestamp,
       input.projectId,
@@ -1915,15 +1882,6 @@ async function updateTask(env, id, input, actor) {
     }
   }
   const activityValues = { ...input.changes };
-  const dueDate = Object.hasOwn(input.changes, "dueDate")
-    ? input.changes.dueDate
-    : currentTask.dueDate;
-  const recurrence = Object.hasOwn(input.changes, "recurrence")
-    ? input.changes.recurrence
-    : currentTask.recurrence;
-  if (recurrence && !dueDate) {
-    throw new ApiError(400, "INVALID_FIELD", "A recurring issue requires a due date");
-  }
 
   const assignments = [];
   const values = [];
@@ -1941,9 +1899,6 @@ async function updateTask(env, id, input, actor) {
     if (key === "developmentContext") {
       assignments.push("development_context_type = ?", "development_branch = ?");
       values.push(value?.type ?? null, value?.branch ?? null);
-    } else if (key === "recurrence") {
-      assignments.push("recurrence_interval = ?", "recurrence_unit = ?");
-      values.push(value?.interval ?? null, value?.unit ?? null);
     } else {
       assignments.push(`${columns[key]} = ?`);
       values.push(key === "labels" ? JSON.stringify(value) : value);

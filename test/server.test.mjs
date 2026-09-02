@@ -687,7 +687,6 @@ test("project and task CRUD flow", async () => {
         branch: "worktree/taskboard",
       },
       dueDate: "2026-07-24",
-      recurrence: { interval: 2, unit: "week" },
     },
   });
   assert.equal(createResult.response.status, 201);
@@ -708,7 +707,6 @@ test("project and task CRUD flow", async () => {
     branch: "worktree/taskboard",
   });
   assert.equal(created.dueDate, "2026-07-24");
-  assert.deepEqual(created.recurrence, { interval: 2, unit: "week" });
 
   const projectsAfterCreate = await request(baseUrl, "/api/projects");
   const websiteProject = projectsAfterCreate.body.projects.find((project) => project.id === "website");

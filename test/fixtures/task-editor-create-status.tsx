@@ -20,7 +20,6 @@ const oldTodoDraft: NewTaskEditorDraft = {
   developmentContext: null,
   startDate: "",
   dueDate: "",
-  recurrence: null,
   attachments: [],
   relations: {
     parentId: null,

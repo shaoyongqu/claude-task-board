@@ -429,7 +429,7 @@ export function TaskDetail({
   );
   const [editingDescription, setEditingDescription] = useState(false);
   const [propertyMenu, setPropertyMenu] = useState<
-    "status" | "priority" | "assignee" | "labels" | "modelProfile" | "reasoningEffort" | "development" | "recurrence" | "schedule" | null
+    "status" | "priority" | "assignee" | "labels" | "modelProfile" | "reasoningEffort" | "development" | "schedule" | null
   >(null);
   const schedulePopoverRef = useRef<HTMLDivElement | null>(null);
   const [savingProperty, setSavingProperty] = useState<string | null>(null);
@@ -1910,42 +1910,10 @@ export function TaskDetail({
                   dueDate: event.target.value || null,
                   ...(event.target.value
                     ? {}
-                    : { recurrence: null, ...(scheduleIsPeriodic(currentTask.schedule) ? { schedule: null } : {}) }),
+                    : { ...(scheduleIsPeriodic(currentTask.schedule) ? { schedule: null } : {}) }),
                 }, "dueDate")}
               />
             </label>
-            <div className="detail-property-row">
-              <span className="detail-property-label">{text("重复", "Recurrence")}</span>
-              <TaskPropertyPicker
-                value={currentTask.recurrence?.unit ?? ""}
-                options={[
-                  { value: "", label: text("不重复", "Does not repeat"), icon: <RecurrenceIcon color="currentColor" size={14} /> },
-                  { value: "day", label: text("每天", "Daily"), icon: <RecurrenceIcon color="currentColor" size={14} /> },
-                  { value: "week", label: text("每周", "Weekly"), icon: <RecurrenceIcon color="currentColor" size={14} /> },
-                  { value: "month", label: text("每月", "Monthly"), icon: <RecurrenceIcon color="currentColor" size={14} /> },
-                  { value: "year", label: text("每年", "Yearly"), icon: <RecurrenceIcon color="currentColor" size={14} /> },
-                ]}
-                open={propertyMenu === "recurrence"}
-                disabled={savingProperty === "recurrence"}
-                className="detail-property-picker"
-                triggerClassName="detail-property-trigger"
-                ariaLabel={text("重复", "Recurrence")}
-                onOpenChange={(open) => setPropertyMenu(open ? "recurrence" : null)}
-                onChange={(value) => {
-                  const unit = value as Recurrence["unit"] | "";
-                  const changes: Partial<TaskDraft> = {
-                    recurrence: unit ? { interval: 1, unit } : null,
-                  };
-                  if (unit && !currentTask.dueDate) {
-                    const dueDate = new Date();
-                    dueDate.setDate(dueDate.getDate() + 7);
-                    changes.dueDate = new Date(dueDate.getTime() - dueDate.getTimezoneOffset() * 60_000)
-                      .toISOString().slice(0, 10);
-                  }
-                  void saveTask(changes, "recurrence");
-                }}
-              />
-            </div>
             <div className="detail-property-row schedule-property" ref={schedulePopoverRef}>
               <span className="detail-property-icon" aria-hidden="true"><RecurrenceIcon color="currentColor" size={14} /></span>
               <span className="detail-property-label">{text("定时执行", "Schedule")}</span>
