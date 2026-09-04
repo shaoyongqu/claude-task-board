@@ -265,6 +265,11 @@ export interface ClaudeSessionPendingInput {
   toolDetail: string | null;
   questions: ClaudeSessionPendingQuestion[] | null;
   receivedAt: string | null;
+  // Whether the workspace carries the AskUserQuestion broker hook (question
+  // kind only). False means the session cannot be answered from the board:
+  // either the workspace was never integrated, or the session started before
+  // the hook existed.
+  brokerReady?: boolean | null;
 }
 
 export interface ClaudeSessionTranscript {

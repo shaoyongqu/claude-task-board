@@ -7,8 +7,10 @@ import { test } from "node:test";
 import {
   isBoardManagedWorkspace,
   projectIntegrationStatus,
+  provisionWorkspaceIntegrations,
   removeProjectIntegration,
   setupProjectIntegration,
+  workspaceHasQuestionBroker,
 } from "../server/claude-integration.mjs";
 
 const BOARD_URL = "http://127.0.0.1:47823";
@@ -117,6 +119,83 @@ test("setup upgrades a legacy three-hook workspace to the new hooks", async () =
     assert.equal(after.hooks.preToolUse, true);
   } finally {
     await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("workspaceHasQuestionBroker reflects the broker hook presence", async () => {
+  const workspace = await createWorkspace();
+  try {
+    assert.equal(await workspaceHasQuestionBroker(workspace), false);
+    await setupProjectIntegration({ workspacePath: workspace, boardUrl: BOARD_URL });
+    assert.equal(await workspaceHasQuestionBroker(workspace), true);
+    await removeProjectIntegration({ workspacePath: workspace });
+    assert.equal(await workspaceHasQuestionBroker(workspace), false);
+    assert.equal(await workspaceHasQuestionBroker(null), false);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("provisionWorkspaceIntegrations covers managed and previously integrated workspaces only", async () => {
+  const managedRoot = await createWorkspace();
+  const managed = path.join(managedRoot, "managed-proj");
+  const legacyExternal = await createWorkspace();
+  const untouchedExternal = await createWorkspace();
+  try {
+    // A legacy (three-hook) integration in an external workspace.
+    await setupProjectIntegration({ workspacePath: legacyExternal, boardUrl: BOARD_URL });
+    const settingsPath = path.join(legacyExternal, ".claude", "settings.json");
+    const settings = JSON.parse(await readFile(settingsPath, "utf8"));
+    const legacy = { hooks: {} };
+    for (const event of ["SessionStart", "SessionEnd", "Stop"]) {
+      legacy.hooks[event] = [{ hooks: [{ type: "command", command: settings.hooks[event][0].hooks[0].command }] }];
+    }
+    await writeFile(settingsPath, JSON.stringify(legacy, null, 2));
+
+    const touched = await provisionWorkspaceIntegrations(
+      [
+        { id: "managed", workspacePath: managed },
+        { id: "legacy-external", workspacePath: legacyExternal },
+        { id: "untouched-external", workspacePath: untouchedExternal },
+        { id: "no-workspace", workspacePath: null },
+      ],
+      "http://127.0.0.1:49999",
+      { env: { CLAUDE_TASKBOARD_WORKSPACE_ROOT: managedRoot }, home: os.homedir() },
+    );
+
+    assert.deepEqual(touched.map((entry) => entry.projectId).sort(), ["legacy-external", "managed"]);
+    assert.equal((await projectIntegrationStatus(managed)).configured, true);
+    const upgraded = await projectIntegrationStatus(legacyExternal);
+    assert.equal(upgraded.hooks.notification, true);
+    assert.equal(upgraded.hooks.preToolUse, true);
+    assert.match(
+      JSON.parse(await readFile(path.join(legacyExternal, ".claude", "settings.json"), "utf8"))
+        .hooks.PreToolUse[0].hooks[0].command,
+      /127\.0\.0\.1:49999/,
+    );
+    // A never-integrated external workspace stays untouched.
+    assert.equal(await stat(path.join(untouchedExternal, ".mcp.json")).then(() => true, () => false), false);
+    assert.equal(await stat(path.join(untouchedExternal, ".claude")).then(() => true, () => false), false);
+
+    // Idempotent: a second run writes nothing.
+    const again = await provisionWorkspaceIntegrations(
+      [
+        { id: "managed", workspacePath: managed },
+        { id: "legacy-external", workspacePath: legacyExternal },
+      ],
+      "http://127.0.0.1:49999",
+      { env: { CLAUDE_TASKBOARD_WORKSPACE_ROOT: managedRoot }, home: os.homedir() },
+    );
+    assert.deepEqual(again, [
+      { projectId: "managed", workspacePath: managed, wrote: [] },
+      { projectId: "legacy-external", workspacePath: legacyExternal, wrote: [] },
+    ]);
+  } finally {
+    await Promise.all([
+      rm(managedRoot, { recursive: true, force: true }),
+      rm(legacyExternal, { recursive: true, force: true }),
+      rm(untouchedExternal, { recursive: true, force: true }),
+    ]);
   }
 });
 

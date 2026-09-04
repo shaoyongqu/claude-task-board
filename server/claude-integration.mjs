@@ -315,6 +315,43 @@ export async function removeProjectIntegration({ workspacePath }) {
   return { removed, status: await projectIntegrationStatus(workspacePath) };
 }
 
+// Whether the workspace's project settings carry the board's AskUserQuestion
+// broker hook. Sessions started while this is false cannot be answered from
+// the board (Claude Code snapshots hooks at session start).
+export async function workspaceHasQuestionBroker(workspacePath) {
+  if (typeof workspacePath !== "string" || !workspacePath) return false;
+  const settings = await readJsonFile(path.join(workspacePath, ".claude", "settings.json"));
+  const groups = settings?.hooks?.PreToolUse;
+  return Array.isArray(groups) && groups.some(ownsHookGroup);
+}
+
+// Refreshes the integration files for projects whose workspaces this board
+// may touch: board-managed workspaces (provisioned without asking) and any
+// workspace that already carries board-owned hooks (the user opted into
+// integration there before, so newly introduced hooks are added too).
+// External repositories without prior integration are never written.
+export async function provisionWorkspaceIntegrations(projects, boardUrl, options = {}) {
+  const touched = [];
+  for (const project of projects) {
+    const workspacePath = project?.workspacePath;
+    if (typeof workspacePath !== "string" || !workspacePath) continue;
+    if (!isBoardManagedWorkspace(workspacePath, options)) {
+      let status = null;
+      try {
+        status = await projectIntegrationStatus(workspacePath);
+      } catch {
+        continue;
+      }
+      if (!status.hooks.sessionStart) continue;
+    }
+    try {
+      const result = await setupProjectIntegration({ workspacePath, boardUrl });
+      touched.push({ projectId: project.id, workspacePath, wrote: result.wrote });
+    } catch {}
+  }
+  return touched;
+}
+
 export function claudeHomeDirectory(env = process.env) {
   if (typeof env.CLAUDE_CONFIG_DIR === "string" && env.CLAUDE_CONFIG_DIR.trim()) {
     return env.CLAUDE_CONFIG_DIR.trim();

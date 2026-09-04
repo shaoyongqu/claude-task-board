@@ -31,8 +31,10 @@ import {
   isBoardManagedWorkspace,
   manageTaskboardSkillInstalled,
   projectIntegrationStatus,
+  provisionWorkspaceIntegrations,
   removeProjectIntegration,
   setupProjectIntegration,
+  workspaceHasQuestionBroker,
 } from "./claude-integration.mjs";
 import { AiChatService } from "./ai-chat.mjs";
 import {
@@ -2723,6 +2725,15 @@ export function createTaskboardServer(options = {}) {
             }
           } catch {}
         }
+        // Whether the workspace could broker this question to the board at
+        // all; a negative answer means either the workspace was never
+        // integrated or the session predates the hook (hooks are snapshotted
+        // at session start), so the UI can tell the user which fix applies.
+        const brokerReady = state.awaitingInput?.kind === "question"
+          ? await workspaceHasQuestionBroker(
+            workspacePath ?? sessionRegistry.get(threadId)?.workspacePath ?? null,
+          )
+          : null;
         return sendJson(response, 200, {
           threadId,
           events,
@@ -2730,7 +2741,9 @@ export function createTaskboardServer(options = {}) {
           running: state.running,
           completed: state.completed,
           total: state.total,
-          pendingInput: state.awaitingInput ?? null,
+          pendingInput: state.awaitingInput
+            ? { ...state.awaitingInput, brokerReady }
+            : null,
         });
       }
 
@@ -4143,23 +4156,12 @@ export function createTaskboardServer(options = {}) {
         aiChat.setBoardBaseUrl(listenUrl);
         automationScheduler.setBoardBaseUrl(listenUrl);
         automationScheduler.resume();
-        // Provision/refresh the Claude Code integration files for
-        // board-managed workspaces. setupProjectIntegration is idempotent and
-        // surgical, so always running it both upgrades existing workspaces to
-        // newly introduced hooks and repairs a stale board URL after a port
-        // change.
-        void (async () => {
-          for (const project of database.listProjects()) {
-            if (!project.workspacePath) continue;
-            if (!isBoardManagedWorkspace(project.workspacePath)) continue;
-            try {
-              await setupProjectIntegration({
-                workspacePath: project.workspacePath,
-                boardUrl: listenUrl,
-              });
-            } catch {}
-          }
-        })();
+        // Provision/refresh the Claude Code integration files for workspaces
+        // this board may touch: board-managed workspaces plus external ones
+        // the user already integrated (they get newly introduced hooks too).
+        // setupProjectIntegration is idempotent and surgical, so always
+        // running it also repairs a stale board URL after a port change.
+        void provisionWorkspaceIntegrations(database.listProjects(), listenUrl);
       }
       return address;
     },

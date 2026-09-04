@@ -177,10 +177,22 @@ function PendingInputBar({
           </button>
         ) : (
           <>
-            <span className="claude-session-pending-note">{text(
-              "该问题由终端会话直接持有（工作区尚未安装问答代理钩子），请在终端中回应。",
-              "This question is held by the terminal session itself (the workspace does not have the question-broker hook yet); answer it in the terminal.",
-            )}</span>
+            <span className="claude-session-pending-note">
+              {pendingInput.kind === "question"
+                ? pendingInput.brokerReady === false
+                  ? text(
+                    "此工作区还没有看板问答钩子：在该项目「⋯ 菜单 → Claude 集成…」中点击「配置集成」，之后新开的会话即可直接在这里回答；本次请在终端中选择。",
+                    "This workspace lacks the board question hook: open the project's ⋯ menu → Claude integration… and press Set up integration; sessions started afterwards can be answered here. For now, answer in the terminal.",
+                  )
+                  : text(
+                    "本会话启动时还没有问答钩子（Claude Code 在会话启动时加载钩子），无法在看板中直接回答；新开的会话即可。本次请在终端中选择。",
+                    "This session started before the question hook existed (Claude Code loads hooks at session start), so it cannot be answered here; newly started sessions can. For now, answer in the terminal.",
+                  )
+                : text(
+                  "权限确认由终端会话持有，请在终端中选择允许或拒绝。",
+                  "The permission prompt is held by the terminal session; allow or deny it there.",
+                )}
+            </span>
             <button
               className="button secondary"
               type="button"
