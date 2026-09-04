@@ -17,14 +17,14 @@ async function createWorkspace() {
   return mkdtemp(path.join(os.tmpdir(), "claude-integration-"));
 }
 
-test("setup writes the three integration artifacts into a fresh workspace", async () => {
+test("setup writes the integration artifacts into a fresh workspace", async () => {
   const workspace = await createWorkspace();
   try {
     const { wrote, status } = await setupProjectIntegration({ workspacePath: workspace, boardUrl: BOARD_URL });
     assert.deepEqual([...wrote].sort(), [".claude/commands/e-taskboard.md", ".claude/commands/taskboard-status.md", ".claude/settings.json", ".mcp.json"]);
     assert.equal(status.configured, true);
     assert.equal(status.mcp, true);
-    assert.deepEqual(status.hooks, { sessionStart: true, sessionEnd: true, stop: true });
+    assert.deepEqual(status.hooks, { sessionStart: true, sessionEnd: true, stop: true, notification: true, preToolUse: true });
     assert.deepEqual(status.commands, { eTaskboard: true, taskboardStatus: true });
 
     const mcp = JSON.parse(await readFile(path.join(workspace, ".mcp.json"), "utf8"));
@@ -32,11 +32,15 @@ test("setup writes the three integration artifacts into a fresh workspace", asyn
     assert.equal(mcp.mcpServers["claude-task-board"].env.CLAUDE_TASKBOARD_URL, BOARD_URL);
 
     const settings = JSON.parse(await readFile(path.join(workspace, ".claude", "settings.json"), "utf8"));
-    for (const event of ["SessionStart", "SessionEnd", "Stop"]) {
-      const command = settings.hooks[event][0].hooks[0].command;
-      assert.match(command, /hooks-bridge\.mjs/);
-      assert.match(command, new RegExp(BOARD_URL.replaceAll(".", "\\.")));
+    for (const event of ["SessionStart", "SessionEnd", "Stop", "Notification", "PreToolUse"]) {
+      const group = settings.hooks[event][0];
+      assert.match(group.hooks[0].command, /(hooks-bridge|tool-decision-bridge)\.mjs/);
+      assert.match(group.hooks[0].command, new RegExp(BOARD_URL.replaceAll(".", "\\.")));
     }
+    assert.equal(settings.hooks.Notification[0].matcher, "permission_prompt");
+    assert.match(settings.hooks.Notification[0].hooks[0].command, /hooks-bridge\.mjs/);
+    assert.equal(settings.hooks.PreToolUse[0].matcher, "AskUserQuestion");
+    assert.match(settings.hooks.PreToolUse[0].hooks[0].command, /tool-decision-bridge\.mjs/);
 
     const command = await readFile(path.join(workspace, ".claude", "commands", "e-taskboard.md"), "utf8");
     assert.match(command, /\$0/);
@@ -85,6 +89,32 @@ test("setup is idempotent and preserves unrelated user configuration", async () 
     const mcpBackup = await readFile(path.join(workspace, `.mcp.json.claude-task-board.bak`), "utf8");
     assert.equal(JSON.parse(mcpBackup).mcpServers.other.command, "npx");
     assert.ok(await stat(path.join(workspace, ".claude", `settings.json.claude-task-board.bak`)).then(() => true));
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("setup upgrades a legacy three-hook workspace to the new hooks", async () => {
+  const workspace = await createWorkspace();
+  try {
+    await setupProjectIntegration({ workspacePath: workspace, boardUrl: BOARD_URL });
+    // Roll the settings back to the legacy SessionStart/SessionEnd/Stop shape.
+    const settingsPath = path.join(workspace, ".claude", "settings.json");
+    const settings = JSON.parse(await readFile(settingsPath, "utf8"));
+    const legacy = { model: settings.model, hooks: {} };
+    for (const event of ["SessionStart", "SessionEnd", "Stop"]) {
+      legacy.hooks[event] = [{ hooks: [{ type: "command", command: settings.hooks[event][0].hooks[0].command }] }];
+    }
+    await writeFile(settingsPath, JSON.stringify(legacy, null, 2));
+    const before = await projectIntegrationStatus(workspace);
+    assert.equal(before.configured, false);
+
+    const { wrote } = await setupProjectIntegration({ workspacePath: workspace, boardUrl: BOARD_URL });
+    assert.deepEqual(wrote, [".claude/settings.json"]);
+    const after = await projectIntegrationStatus(workspace);
+    assert.equal(after.configured, true);
+    assert.equal(after.hooks.notification, true);
+    assert.equal(after.hooks.preToolUse, true);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

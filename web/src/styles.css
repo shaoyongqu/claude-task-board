@@ -9791,6 +9791,144 @@ kbd {
   min-width: 0;
 }
 
+/* ---- In-progress card border choreography ----
+   Running: green marquee light circling the card. Awaiting human input
+   (question/permission): pulsing orange ring. Interrupted / paused /
+   finished-session-but-issue-still-in-progress: brown steady glow. */
+
+@property --card-marquee-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.task-card.is-running-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  padding: 1.5px;
+  background: conic-gradient(
+    from var(--card-marquee-angle),
+    rgba(0, 165, 88, 0) 0%,
+    rgba(0, 165, 88, .15) 12%,
+    rgba(0, 165, 88, .95) 22%,
+    rgba(0, 165, 88, .15) 34%,
+    rgba(0, 165, 88, 0) 46%,
+    rgba(0, 165, 88, 0) 100%
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: card-marquee-spin 2.6s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes card-marquee-spin {
+  to {
+    --card-marquee-angle: 360deg;
+  }
+}
+
+.task-card.is-awaiting-card {
+  border-color: rgba(245, 158, 11, .65);
+  animation: card-awaiting-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes card-awaiting-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 0 1.5px rgba(245, 158, 11, .55),
+      0 0 12px rgba(245, 158, 11, .22),
+      var(--card-shadow);
+  }
+  50% {
+    box-shadow:
+      0 0 0 2px rgba(245, 158, 11, .85),
+      0 0 20px rgba(245, 158, 11, .4),
+      var(--card-shadow);
+  }
+}
+
+.task-card.is-stalled-card {
+  border-color: rgba(154, 107, 63, .55);
+  animation: card-stalled-pulse 3.2s ease-in-out infinite;
+}
+
+@keyframes card-stalled-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 0 1px rgba(154, 107, 63, .4),
+      0 0 8px rgba(154, 107, 63, .16),
+      var(--card-shadow);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1.5px rgba(154, 107, 63, .6),
+      0 0 14px rgba(154, 107, 63, .28),
+      var(--card-shadow);
+  }
+}
+
+/* Envelope badge: the session bound to this issue is blocked on a human. */
+.card-attention-badge {
+  position: relative;
+  /* Card children are pointer-events: none by default (under the card-wide
+     open overlay); opt back in so the envelope is directly clickable. */
+  z-index: 2;
+  pointer-events: auto;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #fbbf24, #f59e0b);
+  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 0 0 0 rgba(245, 158, 11, .5);
+  animation: card-attention-ping 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.card-attention-badge:hover {
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+}
+
+@keyframes card-attention-ping {
+  0% {
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, .45);
+  }
+  70% {
+    box-shadow: 0 0 0 6px rgba(245, 158, 11, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0);
+  }
+}
+
+.task-attention-glyph {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  color: #f59e0b;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.task-processing-row.is-awaiting .task-processing-label {
+  color: #b45309;
+  font-weight: 560;
+}
+
+:root[data-theme="dark"] .task-processing-row.is-awaiting .task-processing-label {
+  color: #fbbf24;
+}
+
+
 .task-card-footer {
   display: flex;
   align-items: center;
@@ -12507,6 +12645,168 @@ kbd {
   color: var(--text-secondary);
   font-size: 12px;
   text-align: center;
+}
+
+.claude-session-status.is-awaiting {
+  background: color-mix(in srgb, #f59e0b 16%, transparent);
+  color: #b45309;
+}
+
+:root[data-theme="dark"] .claude-session-status.is-awaiting {
+  color: #fbbf24;
+}
+
+/* Bottom bar: the session is blocked on a human (question or permission). */
+.claude-session-pending {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 44%;
+  padding: 12px 16px 14px;
+  border-top: var(--border-hairline) solid var(--border);
+  background: color-mix(in srgb, #f59e0b 5%, var(--surface));
+  overflow: auto;
+}
+
+.claude-session-pending-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.claude-session-pending-kind {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 560;
+}
+
+.claude-session-pending-kind.is-question {
+  background: color-mix(in srgb, #f59e0b 18%, transparent);
+  color: #b45309;
+}
+
+.claude-session-pending-kind.is-permission {
+  background: color-mix(in srgb, #e5484d 12%, transparent);
+  color: #e5484d;
+}
+
+:root[data-theme="dark"] .claude-session-pending-kind.is-question {
+  color: #fbbf24;
+}
+
+.claude-session-pending-message {
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.claude-session-pending-detail {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text-primary) 5%, transparent);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.claude-session-question {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.claude-session-question-header {
+  align-self: flex-start;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-primary) 7%, transparent);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.claude-session-question-text {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.claude-session-question-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.claude-session-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  max-width: 100%;
+  padding: 6px 10px;
+  border: var(--border-hairline) solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  cursor: pointer;
+  text-align: left;
+}
+
+.claude-session-option:hover:not(:disabled) {
+  border-color: rgba(245, 158, 11, .55);
+}
+
+.claude-session-option:disabled {
+  cursor: default;
+  opacity: .78;
+}
+
+.claude-session-option.is-selected {
+  border-color: #f59e0b;
+  background: color-mix(in srgb, #f59e0b 10%, var(--surface-raised));
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, .45);
+}
+
+.claude-session-option-label {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 560;
+}
+
+.claude-session-option-description {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.claude-session-question-custom {
+  width: 100%;
+  padding: 6px 10px;
+  border: var(--border-hairline) solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.claude-session-pending-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.claude-session-pending-note {
+  margin-right: auto;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.4;
 }
 .header-model-trigger {
   display: inline-flex;

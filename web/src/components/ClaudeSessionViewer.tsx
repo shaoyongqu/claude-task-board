@@ -1,5 +1,10 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { getClaudeSessionTranscript, type ClaudeSessionTranscript } from "../api";
+import {
+  answerClaudeSessionInput,
+  getClaudeSessionTranscript,
+  type ClaudeSessionPendingInput,
+  type ClaudeSessionTranscript,
+} from "../api";
 import { useTaskboardI18n } from "../i18n";
 import { CodexResumeIcon, ConversationIcon } from "./SemanticIcons";
 
@@ -24,6 +29,9 @@ function statusLabel(
   transcript: ClaudeSessionTranscript,
   text: (chinese: string, english: string) => string,
 ) {
+  if (transcript.pendingInput) {
+    return text("等待回应", "Awaiting you");
+  }
   if (transcript.running) {
     if (transcript.total !== null) {
       return `${transcript.completed ?? 0}/${transcript.total}`;
@@ -31,6 +39,162 @@ function statusLabel(
     return text("正在处理", "Processing");
   }
   return text("已结束", "Finished");
+}
+
+type QuestionDraft = { selections: string[]; custom: string };
+
+function draftIsAnswered(draft: QuestionDraft) {
+  return draft.selections.length > 0 || draft.custom.trim().length > 0;
+}
+
+// Bottom bar for a session blocked on a human. Brokered AskUserQuestion calls
+// (requestId present) can be answered right here; permission dialogs live in
+// the owning terminal, so those (and questions from workspaces without the
+// PreToolUse hook) only mirror the pending prompt and offer the terminal jump.
+function PendingInputBar({
+  threadId,
+  pendingInput,
+  onAnswered,
+  onContinueInTerminal,
+}: {
+  threadId: string;
+  pendingInput: ClaudeSessionPendingInput;
+  onAnswered: () => void;
+  onContinueInTerminal: (threadId: string) => void;
+}) {
+  const { text } = useTaskboardI18n();
+  const [drafts, setDrafts] = useState<QuestionDraft[]>(() => (
+    (pendingInput.questions ?? []).map(() => ({ selections: [], custom: "" }))
+  ));
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    setDrafts((pendingInput.questions ?? []).map(() => ({ selections: [], custom: "" })));
+    setError(null);
+  }, [pendingInput.requestId, pendingInput.toolUseId, pendingInput.questions?.length]);
+
+  function toggleSelection(index: number, label: string, multiSelect: boolean) {
+    setDrafts((current) => current.map((draft, position) => {
+      if (position !== index) return draft;
+      if (!multiSelect) {
+        return draft.selections[0] === label && !draft.custom
+          ? { ...draft, selections: [] }
+          : { ...draft, selections: [label] };
+      }
+      return {
+        ...draft,
+        selections: draft.selections.includes(label)
+          ? draft.selections.filter((value) => value !== label)
+          : [...draft.selections, label],
+      };
+    }));
+  }
+
+  async function submit() {
+    if (!pendingInput.questions) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await answerClaudeSessionInput(
+        threadId,
+        pendingInput.requestId,
+        pendingInput.questions.map((question, index) => ({
+          question: question.question,
+          selections: drafts[index]?.selections ?? [],
+          custom: drafts[index]?.custom.trim() || null,
+        })),
+      );
+      onAnswered();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const answerable = pendingInput.kind === "question" && pendingInput.requestId !== null;
+  const allAnswered = answerable
+    && (pendingInput.questions ?? []).every((_, index) => draftIsAnswered(drafts[index] ?? { selections: [], custom: "" }));
+
+  return (
+    <footer className="claude-session-pending">
+      <div className="claude-session-pending-head">
+        <span className={`claude-session-pending-kind is-${pendingInput.kind}`}>
+          {pendingInput.kind === "question"
+            ? text("AI 提问，等待你的回应", "The AI is asking you a question")
+            : text("会话在等待授权", "The session is waiting for permission")}
+        </span>
+        {pendingInput.message && <span className="claude-session-pending-message">{pendingInput.message}</span>}
+        {pendingInput.kind === "permission" && pendingInput.toolDetail && (
+          <code className="claude-session-pending-detail">{pendingInput.toolDetail}</code>
+        )}
+      </div>
+      {pendingInput.questions?.map((question, index) => {
+        const draft = drafts[index] ?? { selections: [], custom: "" };
+        return (
+          <div className="claude-session-question" key={index}>
+            {question.header && <span className="claude-session-question-header">{question.header}</span>}
+            <p className="claude-session-question-text">{question.question}</p>
+            <div className="claude-session-question-options">
+              {question.options.map((option) => (
+                <button
+                  key={option.label}
+                  type="button"
+                  disabled={!answerable}
+                  className={`claude-session-option${draft.selections.includes(option.label) ? " is-selected" : ""}`}
+                  title={option.description ?? undefined}
+                  onClick={() => toggleSelection(index, option.label, question.multiSelect)}
+                >
+                  <span className="claude-session-option-label">{option.label}</span>
+                  {option.description && <span className="claude-session-option-description">{option.description}</span>}
+                </button>
+              ))}
+            </div>
+            {answerable && (
+              <input
+                className="claude-session-question-custom"
+                type="text"
+                value={draft.custom}
+                placeholder={text("自定义回答（可选）", "Custom answer (optional)")}
+                onChange={(event) => setDrafts((current) => current.map((item, position) => (
+                  position === index ? { ...item, custom: event.target.value } : item
+                )))}
+              />
+            )}
+          </div>
+        );
+      })}
+      {error && <p className="claude-session-error" role="alert">{error}</p>}
+      <div className="claude-session-pending-actions">
+        {answerable ? (
+          <button
+            className="button primary"
+            type="button"
+            disabled={submitting || !allAnswered}
+            onClick={() => void submit()}
+          >
+            {submitting ? text("发送中…", "Sending…") : text("发送回答", "Send answer")}
+          </button>
+        ) : (
+          <>
+            <span className="claude-session-pending-note">{text(
+              "该问题由终端会话直接持有（工作区尚未安装问答代理钩子），请在终端中回应。",
+              "This question is held by the terminal session itself (the workspace does not have the question-broker hook yet); answer it in the terminal.",
+            )}</span>
+            <button
+              className="button secondary"
+              type="button"
+              title={text("在系统终端中回应此会话", "Answer this session in a system terminal")}
+              onClick={() => onContinueInTerminal(threadId)}
+            >
+              <CodexResumeIcon />
+              <span>{text("在终端中回应", "Answer in terminal")}</span>
+            </button>
+          </>
+        )}
+      </div>
+    </footer>
+  );
 }
 
 // Read-only browser view of a native Claude Code session transcript. The data
@@ -52,7 +216,7 @@ export function ClaudeSessionViewer({
   const pinnedToBottomRef = useRef(true);
   const abortRef = useRef<AbortController | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const runningRef = useRef(false);
+  const activeRef = useRef(false);
 
   const refresh = useCallback(async (explicit: boolean) => {
     if (explicit) setRefreshing(true);
@@ -62,7 +226,7 @@ export function ClaudeSessionViewer({
     try {
       const next = await getClaudeSessionTranscript(threadId, controller.signal);
       if (controller.signal.aborted) return;
-      runningRef.current = next.running;
+      activeRef.current = next.running || next.pendingInput !== null;
       setTranscript(next);
       setError(null);
     } catch (caught) {
@@ -75,7 +239,9 @@ export function ClaudeSessionViewer({
     }
     if (controller.signal.aborted) return;
     if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
-    if (runningRef.current) {
+    // Keep polling while the session runs OR is waiting on a human, so the
+    // bar clears as soon as the answer lands in the transcript.
+    if (activeRef.current) {
       pollTimerRef.current = setTimeout(() => void refresh(false), RUNNING_POLL_INTERVAL_MS);
     }
   }, [threadId]);
@@ -83,7 +249,7 @@ export function ClaudeSessionViewer({
   useEffect(() => {
     setTranscript(null);
     setError(null);
-    runningRef.current = false;
+    activeRef.current = false;
     pinnedToBottomRef.current = true;
     void refresh(false);
     return () => {
@@ -127,7 +293,7 @@ export function ClaudeSessionViewer({
           <span className="claude-session-title">
             <ConversationIcon color="currentColor" size={16} />
             <strong>{title ?? text("任务对话", "Task conversation")}</strong>
-            <span className={`claude-session-status${transcript?.running ? " is-running" : ""}`}>
+            <span className={`claude-session-status${transcript?.running || transcript?.pendingInput ? " is-running" : ""}${transcript?.pendingInput ? " is-awaiting" : ""}`}>
               {transcript ? statusLabel(transcript, text) : "…"}
             </span>
           </span>
@@ -191,6 +357,14 @@ export function ClaudeSessionViewer({
             </Suspense>
           )}
         </div>
+        {transcript?.pendingInput && (
+          <PendingInputBar
+            threadId={threadId}
+            pendingInput={transcript.pendingInput}
+            onAnswered={() => void refresh(false)}
+            onContinueInTerminal={onContinueInTerminal}
+          />
+        )}
       </div>
     </div>
   );

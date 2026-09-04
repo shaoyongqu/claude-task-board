@@ -16,6 +16,85 @@ function isEchoedAutomationText(value) {
   return USER_TEXT_PREFIX_DENYLIST.some((prefix) => value.startsWith(prefix));
 }
 
+const QUESTION_TEXT_LIMIT = 2_000;
+
+function cappedQuestionText(value) {
+  return typeof value === "string" ? value.slice(0, QUESTION_TEXT_LIMIT) : "";
+}
+
+// Tool calls in the transcript tail that have not produced a tool_result yet.
+// An interactive session sitting on one of these is waiting for a human:
+// AskUserQuestion renders its option picker, other tools wait in the
+// permission prompt. Sidechain (subagent) records never block the main turn.
+export function extractPendingToolUses(records) {
+  const pending = new Map();
+  for (const record of records) {
+    if (!record || typeof record !== "object" || record.isSidechain === true) continue;
+    if (record.type === "assistant" && Array.isArray(record.message?.content)) {
+      for (const block of record.message.content) {
+        if (block?.type === "tool_use" && typeof block.id === "string" && block.id) {
+          pending.set(block.id, {
+            id: block.id,
+            name: typeof block.name === "string" ? block.name : "",
+            input: block.input && typeof block.input === "object" ? block.input : null,
+          });
+        }
+      }
+    } else if (record.type === "user" && Array.isArray(record.message?.content)) {
+      for (const block of record.message.content) {
+        if (block?.type === "tool_result" && typeof block.tool_use_id === "string") {
+          pending.delete(block.tool_use_id);
+        }
+      }
+    }
+  }
+  return [...pending.values()];
+}
+
+export function normalizePendingQuestions(input) {
+  if (!input || typeof input !== "object" || !Array.isArray(input.questions)) return null;
+  const questions = [];
+  for (const question of input.questions.slice(0, 4)) {
+    if (!question || typeof question !== "object") continue;
+    const options = Array.isArray(question.options)
+      ? question.options
+        .filter((option) => option && typeof option === "object" && typeof option.label === "string" && option.label)
+        .slice(0, 4)
+        .map((option) => ({
+          label: cappedQuestionText(option.label),
+          description: cappedQuestionText(option.description) || null,
+        }))
+      : [];
+    if (options.length === 0) continue;
+    questions.push({
+      question: cappedQuestionText(question.question),
+      header: cappedQuestionText(question.header) || null,
+      multiSelect: question.multiSelect === true,
+      options,
+    });
+  }
+  return questions.length > 0 ? questions : null;
+}
+
+// The board answers a brokered AskUserQuestion by denying the tool call with a
+// reason phrased like Claude Code's own answered-question tool_result, so the
+// model treats the text as the user's actual answer instead of a failure.
+export function formatAskUserQuestionAnswers(answers) {
+  const parts = [];
+  for (const answer of answers) {
+    if (!answer || typeof answer !== "object") continue;
+    const selections = Array.isArray(answer.selections)
+      ? answer.selections.filter((value) => typeof value === "string" && value)
+      : [];
+    const custom = typeof answer.custom === "string" ? answer.custom.trim() : "";
+    const choices = [...selections, ...(custom ? [`Other: ${custom}`] : [])];
+    if (choices.length === 0) continue;
+    parts.push(`"${cappedQuestionText(answer.question)}"="${choices.join(", ")}"`);
+  }
+  if (parts.length === 0) return null;
+  return `User answered via taskboard: ${parts.join(", ")}. Treat these as the user's actual answers and continue; do not call AskUserQuestion again for these questions.`;
+}
+
 function userTextBlocks(record) {
   const content = record.message?.content;
   if (typeof content === "string") return [content];

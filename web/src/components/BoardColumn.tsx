@@ -44,6 +44,7 @@ interface BoardColumnProps {
   onUpdate: (task: Task, changes: Partial<TaskDraft>) => Promise<Task>;
   onComplete: (task: Task, status: "todo" | "done") => Promise<void>;
   onTerminateExecution?: (task: Task) => void;
+  onAwaitingInput?: (task: Task) => void;
   onContextMenu: (task: Task, position: { x: number; y: number }) => void;
   onDragStart: (task: Task, height: number) => void;
   onDragEnd: () => void;
@@ -77,6 +78,7 @@ export function BoardColumn({
   onUpdate,
   onComplete,
   onTerminateExecution,
+  onAwaitingInput,
   onContextMenu,
   onDragStart,
   onDragEnd,
@@ -195,6 +197,7 @@ export function BoardColumn({
               onUpdate={onUpdate}
               onComplete={onComplete}
               onTerminateExecution={onTerminateExecution}
+              onAwaitingInput={onAwaitingInput}
               onContextMenu={onContextMenu}
               onDragStart={onDragStart}
               onDragEnd={onDragEnd}

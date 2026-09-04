@@ -15,10 +15,15 @@ import { fileURLToPath } from "node:url";
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const MCP_SERVER_PATH = path.join(projectRoot, "server", "mcp.mjs");
 const HOOKS_BRIDGE_PATH = path.join(projectRoot, "server", "hooks-bridge.mjs");
+const TOOL_DECISION_BRIDGE_PATH = path.join(projectRoot, "server", "tool-decision-bridge.mjs");
 const SKILL_SOURCE = path.join(projectRoot, "skills", "manage-taskboard");
 const MCP_SERVER_KEY = "claude-task-board";
 const BACKUP_SUFFIX = ".claude-task-board.bak";
-const HOOK_EVENTS = ["SessionStart", "SessionEnd", "Stop"];
+// SessionStart/SessionEnd/Stop feed the session registry; Notification
+// (permission_prompt matcher) reports an interactive session waiting on a
+// permission dialog; PreToolUse (AskUserQuestion matcher) routes the model's
+// questions through the board so they can be answered from the web UI.
+const HOOK_EVENTS = ["SessionStart", "SessionEnd", "Stop", "Notification", "PreToolUse"];
 
 const E_TASKBOARD_COMMAND = `---
 description: 处理一个看板议题——读取、认领、实现、验证并推进状态 / Work a Task Board issue end to end
@@ -55,9 +60,12 @@ function normalizeForCompare(value) {
 }
 
 function ownsHookEntry(hook) {
-  return hook?.type === "command"
-    && typeof hook.command === "string"
-    && normalizeForCompare(hook.command).includes("hooks-bridge.mjs");
+  if (
+    hook?.type !== "command"
+    || typeof hook.command !== "string"
+  ) return false;
+  const command = normalizeForCompare(hook.command);
+  return command.includes("hooks-bridge.mjs") || command.includes("tool-decision-bridge.mjs");
 }
 
 function ownsHookGroup(group) {
@@ -75,6 +83,33 @@ function hookCommand(boardUrl) {
     "--url",
     boardUrl,
   ].join(" ");
+}
+
+function toolDecisionHookCommand(boardUrl) {
+  return [
+    quote(process.execPath),
+    quote(TOOL_DECISION_BRIDGE_PATH),
+    "--url",
+    boardUrl,
+  ].join(" ");
+}
+
+// The board-owned hook group for one event. Notification only cares about
+// permission prompts; PreToolUse only about AskUserQuestion routing.
+function ownedHookGroup(event, boardUrl) {
+  if (event === "Notification") {
+    return {
+      matcher: "permission_prompt",
+      hooks: [{ type: "command", command: hookCommand(boardUrl) }],
+    };
+  }
+  if (event === "PreToolUse") {
+    return {
+      matcher: "AskUserQuestion",
+      hooks: [{ type: "command", command: toolDecisionHookCommand(boardUrl) }],
+    };
+  }
+  return { hooks: [{ type: "command", command: hookCommand(boardUrl) }] };
 }
 
 function mcpServerEntry(boardUrl) {
@@ -138,12 +173,16 @@ export async function projectIntegrationStatus(workspacePath) {
       sessionStart: hooksStatus.SessionStart,
       sessionEnd: hooksStatus.SessionEnd,
       stop: hooksStatus.Stop,
+      notification: hooksStatus.Notification,
+      preToolUse: hooksStatus.PreToolUse,
     },
     commands,
     configured: mcp
       && hooksStatus.SessionStart
       && hooksStatus.SessionEnd
       && hooksStatus.Stop
+      && hooksStatus.Notification
+      && hooksStatus.PreToolUse
       && commands.eTaskboard
       && commands.taskboardStatus,
   };
@@ -181,15 +220,17 @@ export async function setupProjectIntegration({ workspacePath, boardUrl }) {
       continue;
     }
     const kept = groups.filter((group) => !ownsHookGroup(group));
-    const ours = { hooks: [{ type: "command", command: hookCommand(normalizedUrl) }] };
+    const ours = ownedHookGroup(event, normalizedUrl);
     const oursCommand = ours.hooks[0].command;
     const ownedGroups = groups.filter(ownsHookGroup);
-    // Unchanged only when exactly one owned group exists and it already uses
-    // the current command (kept already excludes every owned group, so a
-    // length equality check can never succeed here).
+    // Unchanged only when exactly one owned group exists, it uses the current
+    // command, and its matcher matches what we would install (kept already
+    // excludes every owned group, so a length equality check can never
+    // succeed here).
     const installedCleanly = ownedGroups.length === 1
       && Array.isArray(ownedGroups[0].hooks)
-      && ownedGroups[0].hooks.some((hook) => hook?.command === oursCommand);
+      && ownedGroups[0].hooks.some((hook) => hook?.command === oursCommand)
+      && (ownedGroups[0].matcher ?? "") === (ours.matcher ?? "");
     if (installedCleanly) {
       nextHooks[event] = groups;
     } else {
@@ -199,7 +240,7 @@ export async function setupProjectIntegration({ workspacePath, boardUrl }) {
   }
   for (const event of HOOK_EVENTS) {
     if (nextHooks[event]) continue;
-    nextHooks[event] = [{ hooks: [{ type: "command", command: hookCommand(normalizedUrl) }] }];
+    nextHooks[event] = [ownedHookGroup(event, normalizedUrl)];
     hooksChanged = true;
   }
   if (hooksChanged || !existingSettings) {

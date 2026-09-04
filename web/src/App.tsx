@@ -3256,6 +3256,15 @@ export function App() {
     }
   }
 
+  // The card's attention envelope: open the session preview for the thread the
+  // issue is currently bound to so the pending question/permission can be
+  // answered without leaving the board.
+  function openAwaitingSession(task: Task) {
+    const threadId = normalizeClaudeThreadId(task.threadId);
+    if (!threadId) return;
+    openClaudeViewer(threadId, task.title, task.projectId);
+  }
+
   async function openTaskInThread(task: Task) {
     if (!localAiChatAvailable) {
       setActionError(text(
@@ -4230,6 +4239,7 @@ export function App() {
                         onUpdate={updateTaskProperties}
                         onComplete={(task, status) => moveTask(task, status)}
                         onTerminateExecution={(task) => void terminateTaskExecution(task)}
+                        onAwaitingInput={openAwaitingSession}
                         onContextMenu={openTaskContextMenu}
                         onDragStart={startTaskDrag}
                         onDragEnd={endTaskDrag}
@@ -4405,9 +4415,19 @@ export function App() {
                     </span>
                   </div>
                   <div className="integration-row">
-                    <span>{text("会话 hooks（SessionStart / SessionEnd / Stop）", "Session hooks (SessionStart / SessionEnd / Stop)")}</span>
-                    <span className={integrationStatus.hooks.sessionStart ? "integration-ok" : "integration-missing"}>
-                      {integrationStatus.hooks.sessionStart ? "✓" : "⬜"}
+                    <span>{text("会话 hooks（SessionStart / SessionEnd / Stop / Notification / PreToolUse）", "Session hooks (SessionStart / SessionEnd / Stop / Notification / PreToolUse)")}</span>
+                    <span className={
+                      integrationStatus.hooks.sessionStart
+                      && integrationStatus.hooks.notification
+                      && integrationStatus.hooks.preToolUse
+                        ? "integration-ok"
+                        : "integration-missing"
+                    }>
+                      {integrationStatus.hooks.sessionStart
+                        && integrationStatus.hooks.notification
+                        && integrationStatus.hooks.preToolUse
+                        ? "✓"
+                        : "⬜"}
                     </span>
                   </div>
                   <div className="integration-row">

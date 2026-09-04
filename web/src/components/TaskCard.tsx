@@ -49,6 +49,7 @@ interface TaskCardProps {
   onUpdate: (task: Task, changes: Partial<TaskDraft>) => Promise<Task>;
   onComplete?: (task: Task, status: "todo" | "done") => Promise<void>;
   onTerminateExecution?: (task: Task) => void;
+  onAwaitingInput?: (task: Task) => void;
   onContextMenu: (task: Task, position: { x: number; y: number }) => void;
   onDragStart: (task: Task, height: number) => void;
   onDragEnd: () => void;
@@ -214,13 +215,24 @@ function ProcessingStatusRow({
   const { text } = useTaskboardI18n();
   const elapsed = elapsedTime(presentation.processing.startedAt, now);
   const running = presentation.processing.running;
+  const awaiting = presentation.processing.awaitingInput;
+  const stateLabel = awaiting
+    ? text("等待你的回应…", "Waiting for your response…")
+    : running
+      ? (elapsed ? text(`已处理 ${elapsed}...`, `Processing for ${elapsed}...`) : text("正在处理...", "Processing..."))
+      : text("暂停处理", "Processing paused");
+  const rowTitle = awaiting?.message
+    ?? (awaiting
+      ? text("会话中有需要你处理的问题，点击右上角信封查看", "The session has a question for you; open the envelope at the top right")
+      : undefined);
   return (
-    <div className={`task-processing-row${running ? " is-running" : " is-paused"}`}>
-      {running && <img className="task-processing-glyph" src={processingAnimation} alt="" aria-hidden="true" />}
-      <span className="task-processing-label">
-        {running
-          ? (elapsed ? text(`已处理 ${elapsed}...`, `Processing for ${elapsed}...`) : text("正在处理...", "Processing..."))
-          : text("暂停处理", "Processing paused")}
+    <div
+      className={`task-processing-row${running && !awaiting ? " is-running" : ""}${awaiting ? " is-awaiting" : ""}${!running && !awaiting ? " is-paused" : ""}`}
+    >
+      {running && !awaiting && <img className="task-processing-glyph" src={processingAnimation} alt="" aria-hidden="true" />}
+      {awaiting && <span className="task-processing-glyph task-attention-glyph" aria-hidden="true">✉</span>}
+      <span className="task-processing-label" title={rowTitle}>
+        {stateLabel}
       </span>
       <span className="task-processing-spacer" aria-hidden="true" />
       {onTerminate && presentation.processing.locked && (
@@ -248,6 +260,43 @@ function ProcessingStatusRow({
         />
       )}
     </div>
+  );
+}
+
+function AttentionBadge({
+  task,
+  awaiting,
+  onOpen,
+}: {
+  task: Task;
+  awaiting: NonNullable<TaskCardPresentation["processing"]["awaitingInput"]>;
+  onOpen?: (task: Task) => void;
+}) {
+  const { text } = useTaskboardI18n();
+  const title = awaiting.message
+    ?? (awaiting.kind === "question"
+      ? text("AI 有问题需要你回答，点击回应", "The AI asked a question; click to answer")
+      : text("会话在等待授权，点击查看", "The session is waiting for permission; click to view"));
+  return (
+    <button
+      className="card-attention-badge"
+      type="button"
+      aria-label={text(`${task.identifier} 等待你的回应`, `${task.identifier} is waiting for your response`)}
+      title={title}
+      onPointerDown={(event) => event.stopPropagation()}
+      onDragStart={(event) => event.preventDefault()}
+      onClick={(event) => {
+        event.stopPropagation();
+        onOpen?.(task);
+      }}
+    >
+      <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+        <path
+          fill="currentColor"
+          d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2Zm0 4-8 5-8-5V6l8 5 8-5v2Z"
+        />
+      </svg>
+    </button>
   );
 }
 
@@ -433,6 +482,7 @@ export function TaskCard({
   onUpdate,
   onComplete,
   onTerminateExecution,
+  onAwaitingInput,
   onContextMenu,
   onDragStart,
   onDragEnd,
@@ -468,6 +518,16 @@ export function TaskCard({
   const propertyDisabled = savingProperty !== null;
   // Executing issues cannot be dragged until their run terminates.
   const executionLocked = processingCard && presentation.processing.locked;
+  // Border choreography for in-progress cards: awaiting human input (orange)
+  // > actively running (green marquee) > interrupted/paused (brown).
+  const awaitingInput = processingCard ? presentation.processing.awaitingInput : null;
+  const borderState = awaitingInput
+    ? " is-awaiting-card"
+    : processingCard && presentation.processing.running
+      ? " is-running-card"
+      : processingCard
+        ? " is-stalled-card"
+        : "";
 
   function updateProperty(changes: Partial<TaskDraft>, property: NonNullable<typeof savingProperty>) {
     setSavingProperty(property);
@@ -478,7 +538,7 @@ export function TaskCard({
 
   return (
     <article
-      className={`task-card task-card-${variant} status-${task.status}${task.schedule ? " has-schedule" : ""}${processingCard ? " is-processing-card" : ""}${processingCard && presentation.processing.running ? " is-running-card" : ""}${image ? " has-media" : ""}${presentation.unread ? " is-unread" : ""}${isDragging ? " is-dragging" : ""}${dragShift ? " is-drag-shifted" : ""}${isMoving ? " is-moving" : ""}${isSettling ? " is-settling" : ""}${isContextMenuOpen ? " is-context-open" : ""}${propertyMenu ? " is-property-menu-open" : ""}`}
+      className={`task-card task-card-${variant} status-${task.status}${task.schedule ? " has-schedule" : ""}${processingCard ? " is-processing-card" : ""}${borderState}${image ? " has-media" : ""}${presentation.unread ? " is-unread" : ""}${isDragging ? " is-dragging" : ""}${dragShift ? " is-drag-shifted" : ""}${isMoving ? " is-moving" : ""}${isSettling ? " is-settling" : ""}${isContextMenuOpen ? " is-context-open" : ""}${propertyMenu ? " is-property-menu-open" : ""}`}
       style={{
         viewTransitionName: task.status === "in_review" ? `review-task-${task.id}` : "none",
         ...(dragShift ? { transform: `translate3d(0, ${dragShift}px, 0)` } : {}),
@@ -512,6 +572,9 @@ export function TaskCard({
           <span className="task-identifier">ID: {displayIdentifier}</span>
         </span>
         {presentation.unread && <span className="task-unread-dot" aria-label={text("有未读更新", "Unread updates")} />}
+        {awaitingInput && (
+          <AttentionBadge task={task} awaiting={awaitingInput} onOpen={onAwaitingInput} />
+        )}
         {task.schedule && (
           <span
             className="card-schedule-hint"

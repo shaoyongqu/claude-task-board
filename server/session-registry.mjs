@@ -49,15 +49,27 @@ export class SessionRegistry {
       lastSeenAt: now,
       endedAt: existing?.endedAt ?? null,
       turnsCompleted: existing?.turnsCompleted ?? 0,
+      // Set by the Notification hook (permission_prompt): the session is
+      // showing a permission dialog and cannot proceed until a human answers.
+      // Consumers treat it as stale once the transcript advances past `at`.
+      attention: existing?.attention ?? null,
     };
     if (event.hook_event_name === "SessionStart") {
       session.endedAt = null;
     }
     if (event.hook_event_name === "SessionEnd") {
       session.endedAt = now;
+      session.attention = null;
     }
     if (event.hook_event_name === "Stop") {
       session.turnsCompleted += 1;
+      session.attention = null;
+    }
+    if (event.hook_event_name === "Notification") {
+      const message = typeof event.message === "string" && event.message.trim()
+        ? event.message.trim().slice(0, 500)
+        : "";
+      if (message) session.attention = { message, at: now };
     }
     this.sessions.set(sessionId, session);
     if (this.sessions.size > this.limit) {

@@ -35,7 +35,12 @@ import {
   setupProjectIntegration,
 } from "./claude-integration.mjs";
 import { AiChatService } from "./ai-chat.mjs";
-import { buildClaudeSessionTranscript } from "./claude-session-transcript.mjs";
+import {
+  buildClaudeSessionTranscript,
+  extractPendingToolUses,
+  formatAskUserQuestionAnswers,
+  normalizePendingQuestions,
+} from "./claude-session-transcript.mjs";
 import {
   configuredModels,
   defaultProjectWorkspacePath,
@@ -2080,6 +2085,10 @@ export function createTaskboardServer(options = {}) {
   const aiEventResponses = new Set();
   const claudeSessionSearches = new Map();
   const claudeSessionStateCache = new Map();
+  // AskUserQuestion calls held open by the PreToolUse bridge while a user
+  // answers in the board UI: requestId -> {resolve(answerPayload), ...}.
+  const pendingToolDecisions = new Map();
+  const TOOL_DECISION_WAIT_MS = 540_000;
 
   function resolveRunningState(state, threadId, registeredSession) {
     // Priority: a controller process this server spawned (exact liveness) >
@@ -2089,6 +2098,59 @@ export function createTaskboardServer(options = {}) {
     }
     if (!registeredSession) return state;
     return { ...state, running: !registeredSession.endedAt };
+  }
+
+  // Interactive sessions blocked on a human (question or permission dialog)
+  // are still mid-turn: report them as running so cards keep the executing
+  // lock instead of flipping to the misleading "processing paused" state.
+  function resolveAwaitingInput(state, threadId, registeredSession) {
+    // Strongest signal: the model's AskUserQuestion is held by our PreToolUse
+    // hook waiting for a board answer.
+    const brokerDecision = [...pendingToolDecisions.values()]
+      .find((decision) => decision.threadId === threadId) ?? null;
+    const pendingQuestion = state.pendingTools?.find((tool) => tool.name === "AskUserQuestion") ?? null;
+    if (brokerDecision || pendingQuestion) {
+      const source = brokerDecision
+        ? { input: brokerDecision.toolInput, receivedAt: brokerDecision.receivedAt }
+        : { input: pendingQuestion.input, receivedAt: null };
+      return {
+        kind: "question",
+        requestId: brokerDecision?.requestId ?? null,
+        toolUseId: pendingQuestion?.id ?? null,
+        questions: normalizePendingQuestions(source.input),
+        receivedAt: source.receivedAt,
+      };
+    }
+    // Otherwise a permission_prompt notification that the transcript has not
+    // advanced past: the session is sitting in the terminal permission dialog.
+    const attention = registeredSession?.attention;
+    if (
+      attention
+      && (!state.lastRecordTimestamp || state.lastRecordTimestamp <= attention.at)
+      && !registeredSession.endedAt
+    ) {
+      const toolName = attention.message.match(/use ([\w.:-]+)/)?.[1] ?? null;
+      const pendingTool = toolName
+        ? state.pendingTools?.find((tool) => tool.name === toolName) ?? null
+        : null;
+      return {
+        kind: "permission",
+        requestId: null,
+        toolUseId: pendingTool?.id ?? null,
+        message: attention.message,
+        toolName,
+        toolDetail: pendingTool ? safeToolDetail(pendingTool) : null,
+        receivedAt: attention.at,
+      };
+    }
+    return null;
+  }
+
+  function safeToolDetail(tool) {
+    const input = tool?.input;
+    if (!input || typeof input !== "object") return null;
+    const detail = input.command ?? input.file_path ?? input.path ?? input.url ?? input.query;
+    return typeof detail === "string" && detail ? detail.slice(0, 500) : null;
   }
 
   // Server-side "really executing" for a task: in_progress plus any live
@@ -2124,7 +2186,7 @@ export function createTaskboardServer(options = {}) {
     const sessionStat = await stat(sessionPath);
     const cached = claudeSessionStateCache.get(sessionPath);
     if (cached?.size === sessionStat.size && cached.mtimeMs === sessionStat.mtimeMs) {
-      return resolveRunningState(cached.state, threadId, registeredSession);
+      return finalizeClaudeSessionState(cached.state, threadId, registeredSession);
     }
 
     const length = Math.min(sessionStat.size, CLAUDE_SESSION_TAIL_BYTES);
@@ -2190,17 +2252,30 @@ export function createTaskboardServer(options = {}) {
       }
     }
 
-    const state = resolveRunningState({
+    const state = {
       completed: progress?.completed ?? null,
       total: progress?.total ?? null,
       running,
-    }, threadId, registeredSession);
+      // Pending tool calls (assistant tool_use with no tool_result yet) and
+      // the newest transcript timestamp feed the awaiting-input detection.
+      pendingTools: extractPendingToolUses(records),
+      lastRecordTimestamp: typeof lastRecord?.timestamp === "string" ? lastRecord.timestamp : null,
+    };
     claudeSessionStateCache.set(sessionPath, {
       size: sessionStat.size,
       mtimeMs: sessionStat.mtimeMs,
       state,
     });
-    return state;
+    return finalizeClaudeSessionState(state, threadId, registeredSession);
+  }
+
+  // Applies the signals that live outside the file cache (scheduler liveness,
+  // hooks registry, in-memory broker decisions) on every read.
+  function finalizeClaudeSessionState(state, threadId, registeredSession) {
+    const awaitingInput = resolveAwaitingInput(state, threadId, registeredSession);
+    const resolved = resolveRunningState(state, threadId, registeredSession);
+    if (!awaitingInput) return resolved;
+    return { ...resolved, running: true, awaitingInput };
   }
 
   const server = createServer(async (request, response) => {
@@ -2603,9 +2678,18 @@ export function createTaskboardServer(options = {}) {
         ))) {
           throw new ApiError(400, "INVALID_FIELD", "'threadId' must contain valid Claude Code session IDs");
         }
-        const entries = await Promise.all(threadIds.map(async (threadId) => (
-          [threadId, await readClaudeSessionState(threadId)]
-        )));
+        const entries = await Promise.all(threadIds.map(async (threadId) => {
+          const state = await readClaudeSessionState(threadId);
+          if (!state) return [threadId, null];
+          return [threadId, {
+            completed: state.completed,
+            total: state.total,
+            running: state.running,
+            awaitingInput: state.awaitingInput
+              ? { kind: state.awaitingInput.kind, message: state.awaitingInput.message ?? null }
+              : null,
+          }];
+        }));
         return sendJson(response, 200, { progress: Object.fromEntries(entries) });
       }
 
@@ -2646,7 +2730,79 @@ export function createTaskboardServer(options = {}) {
           running: state.running,
           completed: state.completed,
           total: state.total,
+          pendingInput: state.awaitingInput ?? null,
         });
+      }
+
+      if (pathname === "/api/local/hooks/pre-tool-use") {
+        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
+        const body = await readJson(request);
+        if (!body || typeof body !== "object" || Array.isArray(body)) {
+          throw new ApiError(400, "INVALID_BODY", "Hook event body must be a JSON object");
+        }
+        const sessionId = typeof body.session_id === "string" ? body.session_id.trim() : "";
+        const toolName = typeof body.tool_name === "string" ? body.tool_name.trim() : "";
+        // Only AskUserQuestion is brokered; anything else falls straight
+        // through to Claude Code's normal permission flow.
+        if (
+          !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)
+          || toolName !== "AskUserQuestion"
+        ) {
+          return sendJson(response, 200, { decision: null });
+        }
+        const requestId = randomUUID();
+        await new Promise((resolve) => {
+          const timer = setTimeout(() => settle({ decision: null }), TOOL_DECISION_WAIT_MS);
+          timer.unref();
+          function settle(payload) {
+            if (!pendingToolDecisions.has(requestId)) return;
+            clearTimeout(timer);
+            pendingToolDecisions.delete(requestId);
+            resolve();
+            sendJson(response, 200, payload);
+          }
+          pendingToolDecisions.set(requestId, {
+            requestId,
+            threadId: sessionId,
+            toolName,
+            toolInput: body.tool_input && typeof body.tool_input === "object" ? body.tool_input : null,
+            receivedAt: new Date().toISOString(),
+            settle,
+          });
+        });
+        return;
+      }
+
+      if (pathname === "/api/local/claude-session-answer") {
+        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
+        const body = await readJson(request);
+        if (!body || typeof body !== "object" || Array.isArray(body)) {
+          throw new ApiError(400, "INVALID_BODY", "Answer body must be a JSON object");
+        }
+        if ([...Object.keys(body)].some((key) => !["requestId", "threadId", "answers"].includes(key))) {
+          throw new ApiError(400, "UNKNOWN_FIELD", "Only 'requestId', 'threadId', and 'answers' are supported");
+        }
+        const requestId = typeof body.requestId === "string" ? body.requestId : "";
+        const threadId = typeof body.threadId === "string"
+          ? body.threadId.trim().replace(/^(?:local|cloud):/i, "")
+          : "";
+        const pending = requestId
+          ? pendingToolDecisions.get(requestId)
+          : threadId
+            ? [...pendingToolDecisions.values()].find((decision) => decision.threadId === threadId) ?? null
+            : null;
+        if (!pending) {
+          throw new ApiError(404, "DECISION_NOT_FOUND", "This question is no longer waiting for an answer");
+        }
+        const answers = Array.isArray(body.answers) ? body.answers : [];
+        const reason = formatAskUserQuestionAnswers(answers);
+        if (!reason) {
+          throw new ApiError(400, "EMPTY_ANSWER", "At least one question must be answered");
+        }
+        pending.settle({
+          decision: { permissionDecision: "deny", permissionDecisionReason: reason },
+        });
+        return sendJson(response, 200, { answered: true });
       }
 
       if (pathname === "/api/local/cloud-session") {
@@ -3987,20 +4143,20 @@ export function createTaskboardServer(options = {}) {
         aiChat.setBoardBaseUrl(listenUrl);
         automationScheduler.setBoardBaseUrl(listenUrl);
         automationScheduler.resume();
-        // Provision the Claude Code integration files for board-managed
-        // workspaces that do not have them yet.
+        // Provision/refresh the Claude Code integration files for
+        // board-managed workspaces. setupProjectIntegration is idempotent and
+        // surgical, so always running it both upgrades existing workspaces to
+        // newly introduced hooks and repairs a stale board URL after a port
+        // change.
         void (async () => {
           for (const project of database.listProjects()) {
             if (!project.workspacePath) continue;
             if (!isBoardManagedWorkspace(project.workspacePath)) continue;
             try {
-              const status = await projectIntegrationStatus(project.workspacePath);
-              if (!status.configured) {
-                await setupProjectIntegration({
-                  workspacePath: project.workspacePath,
-                  boardUrl: listenUrl,
-                });
-              }
+              await setupProjectIntegration({
+                workspacePath: project.workspacePath,
+                boardUrl: listenUrl,
+              });
             } catch {}
           }
         })();

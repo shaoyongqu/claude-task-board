@@ -23,12 +23,21 @@ export interface TaskConversationItem {
   latestTodo: AiChatTodoProgress | null;
 }
 
+export interface TaskAwaitingInput {
+  kind: "question" | "permission";
+  message: string | null;
+}
+
 export interface TaskProcessingPresentation {
   running: boolean;
   // Execution lock: while the bound session is executing (or a board-triggered
   // execution is starting up), the card cannot be dragged and its status
   // cannot be changed until the execution terminates.
   locked: boolean;
+  // Set while the bound session is blocked on a human: the model asked a
+  // question (AskUserQuestion) or the terminal is showing a permission
+  // dialog. The session is still mid-turn, so this is not "paused".
+  awaitingInput: TaskAwaitingInput | null;
   completed: number | null;
   total: number | null;
   startedAt: string | null;
@@ -174,6 +183,7 @@ export function taskCardPresentation(
     completed: number | null;
     total: number | null;
     running: boolean;
+    awaitingInput?: TaskAwaitingInput | null;
   } | null | undefined = undefined,
 ): TaskCardPresentation {
   const conversations = taskConversations(task, aiThreads);
@@ -201,14 +211,18 @@ export function taskCardPresentation(
       : taskNativeSession !== undefined
         ? taskNativeTodoProgress
         : conversations.find((conversation) => conversation.latestTodo)?.latestTodo ?? null;
+  const awaitingInput = task.status === "in_progress"
+    ? taskNativeSession?.awaitingInput ?? null
+    : null;
   const executing = task.status === "in_progress"
-    && (Boolean(running) || taskNativeSession?.running === true);
+    && (Boolean(running) || taskNativeSession?.running === true || awaitingInput !== null);
   return {
     conversations,
     unread,
     processing: {
       running: executing,
       locked: executing,
+      awaitingInput,
       completed: latestTodo?.completed ?? null,
       total: latestTodo?.total ?? null,
       startedAt: runningAi?.currentRun?.startedAt ?? null,

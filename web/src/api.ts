@@ -222,10 +222,20 @@ export async function getTaskboardRevision(
   return request<{ changed: boolean; revision: number }>(`/api/revisions?${query}`, { signal });
 }
 
+export interface ClaudeSessionAwaitingSummary {
+  kind: "question" | "permission";
+  message: string | null;
+}
+
 export async function getClaudeSessionProgress(
   threadIds: string[],
   signal?: AbortSignal,
-): Promise<Record<string, { completed: number | null; total: number | null; running: boolean } | null>> {
+): Promise<Record<string, {
+  completed: number | null;
+  total: number | null;
+  running: boolean;
+  awaitingInput: ClaudeSessionAwaitingSummary | null;
+} | null>> {
   const query = new URLSearchParams();
   for (const threadId of threadIds) query.append("threadId", threadId);
   const data = await request<{
@@ -233,9 +243,28 @@ export async function getClaudeSessionProgress(
       completed: number | null;
       total: number | null;
       running: boolean;
+      awaitingInput: ClaudeSessionAwaitingSummary | null;
     } | null>;
   }>(`/api/local/claude-session-progress?${query}`, { signal });
   return data.progress;
+}
+
+export interface ClaudeSessionPendingQuestion {
+  question: string;
+  header: string | null;
+  multiSelect: boolean;
+  options: { label: string; description: string | null }[];
+}
+
+export interface ClaudeSessionPendingInput {
+  kind: "question" | "permission";
+  requestId: string | null;
+  toolUseId: string | null;
+  message: string | null;
+  toolName: string | null;
+  toolDetail: string | null;
+  questions: ClaudeSessionPendingQuestion[] | null;
+  receivedAt: string | null;
 }
 
 export interface ClaudeSessionTranscript {
@@ -245,6 +274,7 @@ export interface ClaudeSessionTranscript {
   running: boolean;
   completed: number | null;
   total: number | null;
+  pendingInput: ClaudeSessionPendingInput | null;
 }
 
 export async function getClaudeSessionTranscript(
@@ -253,6 +283,22 @@ export async function getClaudeSessionTranscript(
 ): Promise<ClaudeSessionTranscript> {
   const query = new URLSearchParams({ threadId });
   return request<ClaudeSessionTranscript>(`/api/local/claude-session-transcript?${query}`, { signal });
+}
+
+export async function answerClaudeSessionInput(
+  threadId: string,
+  requestId: string | null,
+  answers: { question: string; selections: string[]; custom: string | null }[],
+): Promise<void> {
+  await request("/api/local/claude-session-answer", {
+    method: "POST",
+    body: JSON.stringify({
+      threadId,
+      ...(requestId ? { requestId } : {}),
+      answers,
+    }),
+    signal: AbortSignal.timeout(10_000),
+  });
 }
 
 export async function postAutomationRequest(
@@ -609,7 +655,13 @@ export async function launchTerminalSession(input: {
 export interface ProjectIntegrationStatus {
   workspacePath: string;
   mcp: boolean;
-  hooks: { sessionStart: boolean; sessionEnd: boolean; stop: boolean };
+  hooks: {
+    sessionStart: boolean;
+    sessionEnd: boolean;
+    stop: boolean;
+    notification: boolean;
+    preToolUse: boolean;
+  };
   commands: { eTaskboard: boolean; taskboardStatus: boolean };
   configured: boolean;
 }
