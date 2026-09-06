@@ -190,6 +190,82 @@ function relativeTime(value: string, locale: string): string {
   return new Intl.DateTimeFormat(locale, { month: "short", day: "numeric" }).format(new Date(value));
 }
 
+type ActivityGrouping = "day" | "week" | "none";
+
+// Beyond this many visible entries the timeline auto-collapses every group
+// except the most recent one so long histories stay scannable.
+const ACTIVITY_AUTO_COLLAPSE_ENTRIES = 15;
+
+type ActivityText = (zh: string, en: string) => string;
+
+function dateKeyOf(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function localDateKey(value: string): string {
+  return dateKeyOf(new Date(value));
+}
+
+// Week groups start on Monday.
+function activityGroupKeyOf(value: string, grouping: ActivityGrouping): string {
+  if (grouping === "day") return localDateKey(value);
+  if (grouping === "week") {
+    const date = new Date(value);
+    date.setDate(date.getDate() - ((date.getDay() + 6) % 7));
+    return dateKeyOf(date);
+  }
+  return "all";
+}
+
+function activityGroupLabel(
+  key: string,
+  grouping: ActivityGrouping,
+  locale: string,
+  text: ActivityText,
+): string {
+  if (grouping === "none") return "";
+  const date = new Date(`${key}T00:00:00`);
+  if (grouping === "week") {
+    const end = new Date(date);
+    end.setDate(end.getDate() + 6);
+    const range = new Intl.DateTimeFormat(locale, { month: "short", day: "numeric" });
+    return `${range.format(date)} – ${range.format(end)}`;
+  }
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const prefix = key === dateKeyOf(today)
+    ? text("今天 · ", "Today · ")
+    : key === dateKeyOf(yesterday)
+      ? text("昨天 · ", "Yesterday · ")
+      : "";
+  const options: Intl.DateTimeFormatOptions = date.getFullYear() === today.getFullYear()
+    ? { month: "long", day: "numeric", weekday: "short" }
+    : { year: "numeric", month: "long", day: "numeric", weekday: "short" };
+  return prefix + new Intl.DateTimeFormat(locale, options).format(date);
+}
+
+function scheduleRunStatusLabel(status: ScheduleRun["status"], text: ActivityText): string {
+  if (status === "running") return text("执行中", "Running");
+  if (status === "completed") return text("已完成", "Completed");
+  if (status === "failed") return text("失败", "Failed");
+  return text("已中断", "Interrupted");
+}
+
+function formatRunDuration(run: ScheduleRun, text: ActivityText): string {
+  const end = run.finishedAt ? new Date(run.finishedAt).getTime() : Date.now();
+  const totalSeconds = Math.max(0, Math.round((end - new Date(run.startedAt).getTime()) / 1000));
+  const seconds = totalSeconds % 60;
+  const minutes = Math.floor(totalSeconds / 60) % 60;
+  const hours = Math.floor(totalSeconds / 3600);
+  const duration = hours > 0
+    ? text(`${hours} 小时 ${minutes} 分`, `${hours}h ${minutes}m`)
+    : minutes > 0
+      ? text(`${minutes} 分 ${seconds} 秒`, `${minutes}m ${seconds}s`)
+      : text(`${seconds} 秒`, `${seconds}s`);
+  return run.finishedAt ? text(`耗时 ${duration}`, duration) : text(`已进行 ${duration}`, `${duration} elapsed`);
+}
+
 function resizeTextarea(element: HTMLTextAreaElement | null) {
   if (!element) return;
   element.style.height = "0px";
@@ -438,6 +514,14 @@ export function TaskDetail({
   const [comments, setComments] = useState<Comment[]>([]);
   const [taskActivities, setTaskActivities] = useState<TaskChangeActivity[]>([]);
   const [scheduleRunList, setScheduleRunList] = useState<ScheduleRun[]>([]);
+  const [runsDialogOpen, setRunsDialogOpen] = useState(false);
+  const [activityGrouping, setActivityGrouping] = useState<ActivityGrouping>("day");
+  const [activityDateFilter, setActivityDateFilter] = useState<string | null>(null);
+  const [activityRoundFilter, setActivityRoundFilter] = useState<number | null>(null);
+  // Per-group expansion decisions the user made explicitly; groups without an
+  // entry follow the auto-collapse default (every group but the newest one
+  // collapses once the timeline grows past ACTIVITY_AUTO_COLLAPSE_ENTRIES).
+  const [activityExpanded, setActivityExpanded] = useState<Map<string, boolean>>(new Map());
   const [commentsLoading, setCommentsLoading] = useState(true);
   const [commentsError, setCommentsError] = useState<TaskDetailError | null>(null);
   const [commentSegments, setCommentSegments] = useState<InlineMediaSegment[]>(
@@ -606,6 +690,13 @@ export function TaskDetail({
   const runTotal = currentTask.scheduleRuns?.total ?? 0;
   const runningRunId = currentTask.scheduleRuns?.current?.id ?? null;
   const latestRunFinishedAt = currentTask.scheduleRuns?.latest?.finishedAt ?? null;
+  // scheduleRunList comes back ordered newest → oldest by sequence.
+  const latestScheduleRun = scheduleRunList[0] ?? null;
+  const scheduleRunCounts = useMemo(() => {
+    const counts = { running: 0, completed: 0, failed: 0, interrupted: 0 };
+    for (const run of scheduleRunList) counts[run.status] += 1;
+    return counts;
+  }, [scheduleRunList]);
   useEffect(() => {
     if (runTotal === 0 && runningRunId === null) {
       setScheduleRunList([]);
@@ -625,6 +716,21 @@ export function TaskDetail({
     }
     return map;
   }, [scheduleRunList]);
+
+  useEffect(() => {
+    if (!runsDialogOpen) return;
+    // Trap Escape while the rounds dialog is open so the app-level shortcut
+    // (Escape returns to the board) does not also close the issue detail.
+    function closeRunsDialog(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.stopImmediatePropagation();
+        setRunsDialogOpen(false);
+      }
+    }
+    // Capture phase beats the app-level listener registered earlier on window.
+    window.addEventListener("keydown", closeRunsDialog, true);
+    return () => window.removeEventListener("keydown", closeRunsDialog, true);
+  }, [runsDialogOpen]);
 
   useEffect(() => {
     if (!activeMenuId) return;
@@ -1033,6 +1139,11 @@ export function TaskDetail({
       actors.findIndex((candidate) => actorKey(candidate) === actorKey(actor)) === index
     ));
   const activityTimeline = [
+    {
+      kind: "created" as const,
+      id: "activity-created",
+      createdAt: currentTask.createdAt,
+    },
     ...taskActivities.flatMap((activity) => activity.changes.map((change, index) => ({
       kind: "change" as const,
       id: `${activity.id}-${index}`,
@@ -1049,6 +1160,75 @@ export function TaskDetail({
   ].sort((left, right) => (
     left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id)
   ));
+
+  const activityRoundOptions = [...new Set(comments.flatMap((comment) => {
+    const run = comment.threadId ? runByThreadId.get(comment.threadId) : undefined;
+    return run ? [run.sequence] : [];
+  }))].sort((left, right) => right - left);
+
+  const activityDateOptions = [...new Set(activityTimeline.map((item) => localDateKey(item.createdAt)))]
+    .sort()
+    .reverse();
+
+  const activityFilterActive = activityDateFilter !== null || activityRoundFilter !== null;
+  const filteredTimeline = activityTimeline.filter((item) => {
+    if (activityDateFilter !== null && localDateKey(item.createdAt) !== activityDateFilter) return false;
+    if (activityRoundFilter !== null) {
+      if (item.kind !== "comment") return false;
+      const run = item.comment.threadId ? runByThreadId.get(item.comment.threadId) : undefined;
+      if (!run || run.sequence !== activityRoundFilter) return false;
+    }
+    return true;
+  });
+
+  // Entries are sorted chronologically, so groups come out oldest → newest.
+  const activityGroups = (() => {
+    if (activityGrouping === "none") return [{ key: "all", entries: filteredTimeline }];
+    const grouped = new Map<string, typeof filteredTimeline>();
+    for (const item of filteredTimeline) {
+      const key = activityGroupKeyOf(item.createdAt, activityGrouping);
+      const bucket = grouped.get(key);
+      if (bucket) bucket.push(item);
+      else grouped.set(key, [item]);
+    }
+    return [...grouped.entries()].map(([key, entries]) => ({ key, entries }));
+  })();
+
+  const activityAutoCollapsed = !activityFilterActive
+    && filteredTimeline.length > ACTIVITY_AUTO_COLLAPSE_ENTRIES
+    && activityGroups.length > 1;
+  const latestActivityGroupKey = activityGroups.length > 0
+    ? activityGroups[activityGroups.length - 1].key
+    : null;
+
+  function activityGroupCollapsed(key: string): boolean {
+    const override = activityExpanded.get(key);
+    if (override !== undefined) return !override;
+    return activityAutoCollapsed && key !== latestActivityGroupKey;
+  }
+
+  function toggleActivityGroup(key: string) {
+    // The override stores "expanded": flip it to whatever the group is not showing now.
+    setActivityExpanded((current) => new Map(current).set(key, activityGroupCollapsed(key)));
+  }
+
+  const activityAllCollapsed = activityGroups.length > 0
+    && activityGroups.every((group) => activityGroupCollapsed(group.key));
+
+  function toggleAllActivityGroups() {
+    setActivityExpanded(() => {
+      const next = new Map<string, boolean>();
+      for (const group of activityGroups) next.set(group.key, activityAllCollapsed);
+      return next;
+    });
+  }
+
+  function focusRoundActivity(run: ScheduleRun) {
+    setActivityRoundFilter(run.sequence);
+    setActivityDateFilter(null);
+    setActivityExpanded(new Map());
+    setRunsDialogOpen(false);
+  }
 
   return (
     <section
@@ -1256,278 +1436,377 @@ export function TaskDetail({
             <section className="activity-section" aria-labelledby="activity-heading">
               <header className="activity-heading">
                 <h2 id="activity-heading">{text("活动", "Activity")}</h2>
-                <span>{activityTimeline.length}</span>
+                <span>{activityFilterActive
+                  ? `${filteredTimeline.length}/${activityTimeline.length}`
+                  : activityTimeline.length}</span>
               </header>
 
-              <div className="activity-stream">
-                <div className={`activity-entry activity-created is-${currentTask.creatorType}`}>
-                  <span className="activity-rail-icon activity-creator-icon" aria-hidden="true">
-                    <ActorAvatar
-                      className="comment-avatar"
-                      actor={{
-                        type: currentTask.creatorType,
-                        id: currentTask.creatorId,
-                        name: currentTask.creatorName,
-                        avatarUrl: currentTask.creatorAvatarUrl,
-                      }}
-                    />
-                  </span>
-                  <p>
-                    <strong>{currentTask.creatorName}</strong>
-                    {text(" 创建了此议题", " created this issue")}
-                    <time title={exactTime(currentTask.createdAt, locale)}>{relativeTime(currentTask.createdAt, locale)}</time>
-                  </p>
+              {activityTimeline.length > 0 && (
+                <div className="activity-toolbar">
+                  <div className="activity-segmented" role="group" aria-label={text("活动分组方式", "Activity grouping")}>
+                    {([
+                      ["day", text("按天", "Day")],
+                      ["week", text("按周", "Week")],
+                      ["none", text("不分组", "Flat")],
+                    ] as const).map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        className={activityGrouping === value ? "is-active" : undefined}
+                        aria-pressed={activityGrouping === value}
+                        onClick={() => setActivityGrouping(value)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <select
+                    className="activity-filter-select"
+                    aria-label={text("按日期筛选活动", "Filter activity by date")}
+                    value={activityDateFilter ?? ""}
+                    onChange={(event) => setActivityDateFilter(event.target.value || null)}
+                  >
+                    <option value="">{text("全部日期", "All dates")}</option>
+                    {activityDateOptions.map((key) => (
+                      <option key={key} value={key}>
+                        {activityGroupLabel(key, "day", locale, text)}
+                      </option>
+                    ))}
+                  </select>
+                  {activityRoundOptions.length > 0 && (
+                    <select
+                      className="activity-filter-select"
+                      aria-label={text("按轮次筛选活动", "Filter activity by round")}
+                      value={activityRoundFilter ?? ""}
+                      onChange={(event) => setActivityRoundFilter(
+                        event.target.value === "" ? null : Number(event.target.value),
+                      )}
+                    >
+                      <option value="">{text("全部轮次", "All rounds")}</option>
+                      {activityRoundOptions.map((sequence) => (
+                        <option key={sequence} value={sequence}>
+                          {text(`第 ${sequence} 轮`, `Round ${sequence}`)}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  {activityGrouping !== "none" && activityGroups.length > 1 && (
+                    <button
+                      type="button"
+                      className="activity-collapse-toggle"
+                      onClick={toggleAllActivityGroups}
+                    >
+                      {activityAllCollapsed
+                        ? text("全部展开", "Expand all")
+                        : text("全部折叠", "Collapse all")}
+                    </button>
+                  )}
                 </div>
+              )}
 
+              <div className="activity-stream">
                 {commentsLoading ? (
                   <div className="comments-loading" aria-label={text("正在加载活动", "Loading activity")} aria-busy="true"><i /><i /></div>
-                ) : activityTimeline.map((item) => {
-                  if (item.kind === "change") {
-                    const { activity, change } = item;
-                    const fieldLabels = ACTIVITY_FIELD_LABELS[change.field];
-                    const fieldLabel = fieldLabels
-                      ? text(fieldLabels[0], fieldLabels[1])
-                      : change.field;
-                    const beforeValue = activityValue(
-                      change.field,
-                      change.before,
-                      language,
-                      locale,
-                      text,
-                    );
-                    const afterValue = activityValue(
-                      change.field,
-                      change.after,
-                      language,
-                      locale,
-                      text,
-                    );
-                    return (
-                      <article
-                        className={`activity-entry activity-change is-${activity.actorType}`}
-                        key={item.id}
-                      >
-                        <span className="activity-rail-icon" aria-hidden="true">
-                          <ActivityChangeIcon
-                            field={change.field}
-                            before={change.before}
-                            after={change.after}
-                          />
-                        </span>
-                        <p>
-                          <strong>{activity.actorName}</strong>
-                          {" "}
-                          {change.field === "description" ? (
-                            <>{text("更新了描述", "updated the description")}</>
-                          ) : change.field === "relation" && change.before === null ? (
-                            <>{text("添加了 ", "added ")}<span className="activity-change-value">{afterValue}</span></>
-                          ) : change.field === "relation" && change.after === null ? (
-                            <>{text("移除了 ", "removed ")}<span className="activity-change-value">{beforeValue}</span></>
-                          ) : language === "zh" ? (
-                            <>
-                              将{fieldLabel}从
-                              <span className="activity-change-value">{beforeValue}</span>
-                              改为
-                              <span className="activity-change-value">{afterValue}</span>
-                            </>
-                          ) : (
-                            <>
-                              {`changed ${fieldLabel} from `}
-                              <span className="activity-change-value">{beforeValue}</span>
-                              {" to "}
-                              <span className="activity-change-value">{afterValue}</span>
-                            </>
-                          )}
-                          <time title={exactTime(activity.createdAt, locale)}>{relativeTime(activity.createdAt, locale)}</time>
-                        </p>
-                      </article>
-                    );
-                  }
-                  const comment = item.comment;
+                ) : filteredTimeline.length === 0 ? (
+                  <div className="activity-empty">{text("没有匹配的动态", "No matching activity")}</div>
+                ) : activityGroups.map((group) => {
+                  const collapsed = activityGroupCollapsed(group.key);
                   return (
-                  <article
-                    className={`comment-entry is-${comment.authorType}`}
-                    key={comment.id}
-                    id={`comment-${comment.id}`}
-                  >
-                    <div className="comment-card">
-                      <header className="comment-header">
-                        <ActorAvatar
-                          className="comment-avatar"
-                          actor={{
-                            type: comment.authorType,
-                            id: comment.authorId,
-                            name: comment.authorName,
-                            avatarUrl: comment.authorAvatarUrl,
-                          }}
-                        />
-                        <strong>{comment.authorName}</strong>
-                        {comment.threadId && runByThreadId.has(comment.threadId) && (
-                          <span className="comment-run-badge">
-                            {text(
-                              `第 ${runByThreadId.get(comment.threadId)!.sequence} 轮`,
-                              `Round ${runByThreadId.get(comment.threadId)!.sequence}`,
-                            )}
-                          </span>
-                        )}
-                        <time title={exactTime(comment.createdAt, locale)}>{relativeTime(comment.createdAt, locale)}</time>
-                        {comment.version > 1 && (
+                    <section className="activity-group" key={group.key}>
+                      {activityGrouping !== "none" && (
+                        <button
+                          type="button"
+                          className="activity-group-header"
+                          aria-expanded={!collapsed}
+                          onClick={() => toggleActivityGroup(group.key)}
+                        >
                           <span
-                            className="comment-edited"
-                            title={text(
-                              `编辑于 ${exactTime(comment.updatedAt, locale)}`,
-                              `Edited ${exactTime(comment.updatedAt, locale)}`,
-                            )}
+                            className={`activity-group-chevron${collapsed ? " is-collapsed" : ""}`}
+                            aria-hidden="true"
                           >
-                            {text("已编辑", "Edited")}
+                            <LinearIcon name="chevronDown" />
                           </span>
-                        )}
-                        {editingId !== comment.id && (
-                          <div className="comment-actions" data-comment-menu-root={comment.id}>
-                            <button
-                              type="button"
-                              className="comment-menu-trigger"
-                              aria-label={text("评论操作", "Comment actions")}
-                              aria-haspopup="menu"
-                              aria-expanded={activeMenuId === comment.id}
-                              onClick={() => setActiveMenuId((current) => current === comment.id ? null : comment.id)}
+                          <span className="activity-group-label">
+                            {activityGroupLabel(group.key, activityGrouping, locale, text)}
+                          </span>
+                          <span className="activity-group-line" aria-hidden="true" />
+                          <span className="activity-group-count">
+                            {text(`${group.entries.length} 条`, `${group.entries.length}`)}
+                          </span>
+                        </button>
+                      )}
+                      {!collapsed && group.entries.map((item) => {
+                        if (item.kind === "created") {
+                          return (
+                            <div className={`activity-entry activity-created is-${currentTask.creatorType}`} key={item.id}>
+                              <span className="activity-rail-icon activity-creator-icon" aria-hidden="true">
+                                <ActorAvatar
+                                  className="comment-avatar"
+                                  actor={{
+                                    type: currentTask.creatorType,
+                                    id: currentTask.creatorId,
+                                    name: currentTask.creatorName,
+                                    avatarUrl: currentTask.creatorAvatarUrl,
+                                  }}
+                                />
+                              </span>
+                              <p>
+                                <strong>{currentTask.creatorName}</strong>
+                                {text(" 创建了此议题", " created this issue")}
+                                <time title={exactTime(currentTask.createdAt, locale)}>{relativeTime(currentTask.createdAt, locale)}</time>
+                              </p>
+                            </div>
+                          );
+                        }
+                        if (item.kind === "change") {
+                          const { activity, change } = item;
+                          const fieldLabels = ACTIVITY_FIELD_LABELS[change.field];
+                          const fieldLabel = fieldLabels
+                            ? text(fieldLabels[0], fieldLabels[1])
+                            : change.field;
+                          const beforeValue = activityValue(
+                            change.field,
+                            change.before,
+                            language,
+                            locale,
+                            text,
+                          );
+                          const afterValue = activityValue(
+                            change.field,
+                            change.after,
+                            language,
+                            locale,
+                            text,
+                          );
+                          return (
+                            <article
+                              className={`activity-entry activity-change is-${activity.actorType}`}
+                              key={item.id}
                             >
-                              <MoreIcon color="currentColor" />
-                            </button>
-                            {activeMenuId === comment.id && (
-                              <div className="comment-action-menu" role="menu">
-                                <button
-                                  type="button"
-                                  role="menuitem"
-                                  disabled={savingCommentId !== null}
-                                  onClick={(event) => beginEdit(comment, event.currentTarget)}
+                              <span className="activity-rail-icon" aria-hidden="true">
+                                <ActivityChangeIcon
+                                  field={change.field}
+                                  before={change.before}
+                                  after={change.after}
+                                />
+                              </span>
+                              <p>
+                                <strong>{activity.actorName}</strong>
+                                {" "}
+                                {change.field === "description" ? (
+                                  <>{text("更新了描述", "updated the description")}</>
+                                ) : change.field === "relation" && change.before === null ? (
+                                  <>{text("添加了 ", "added ")}<span className="activity-change-value">{afterValue}</span></>
+                                ) : change.field === "relation" && change.after === null ? (
+                                  <>{text("移除了 ", "removed ")}<span className="activity-change-value">{beforeValue}</span></>
+                                ) : language === "zh" ? (
+                                  <>
+                                    将{fieldLabel}从
+                                    <span className="activity-change-value">{beforeValue}</span>
+                                    改为
+                                    <span className="activity-change-value">{afterValue}</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    {`changed ${fieldLabel} from `}
+                                    <span className="activity-change-value">{beforeValue}</span>
+                                    {" to "}
+                                    <span className="activity-change-value">{afterValue}</span>
+                                  </>
+                                )}
+                                <time title={exactTime(activity.createdAt, locale)}>{relativeTime(activity.createdAt, locale)}</time>
+                              </p>
+                            </article>
+                          );
+                        }
+                        const comment = item.comment;
+                        return (
+                        <article
+                          className={`comment-entry is-${comment.authorType}`}
+                          key={comment.id}
+                          id={`comment-${comment.id}`}
+                        >
+                          <div className="comment-card">
+                            <header className="comment-header">
+                              <ActorAvatar
+                                className="comment-avatar"
+                                actor={{
+                                  type: comment.authorType,
+                                  id: comment.authorId,
+                                  name: comment.authorName,
+                                  avatarUrl: comment.authorAvatarUrl,
+                                }}
+                              />
+                              <strong>{comment.authorName}</strong>
+                              {comment.threadId && runByThreadId.has(comment.threadId) && (
+                                <span className="comment-run-badge">
+                                  {text(
+                                    `第 ${runByThreadId.get(comment.threadId)!.sequence} 轮`,
+                                    `Round ${runByThreadId.get(comment.threadId)!.sequence}`,
+                                  )}
+                                </span>
+                              )}
+                              <time title={exactTime(comment.createdAt, locale)}>{relativeTime(comment.createdAt, locale)}</time>
+                              {comment.version > 1 && (
+                                <span
+                                  className="comment-edited"
+                                  title={text(
+                                    `编辑于 ${exactTime(comment.updatedAt, locale)}`,
+                                    `Edited ${exactTime(comment.updatedAt, locale)}`,
+                                  )}
                                 >
-                                  <EditIcon color="currentColor" />
-                                  {text("编辑评论", "Edit comment")}
-                                </button>
-                                <button
-                                  type="button"
-                                  role="menuitem"
-                                  className="danger"
-                                  onClick={() => { setPendingDelete(comment); setActiveMenuId(null); }}
-                                >
-                                  <DeleteIcon color="currentColor" />
-                                  {text("删除评论", "Delete comment")}
-                                </button>
+                                  {text("已编辑", "Edited")}
+                                </span>
+                              )}
+                              {editingId !== comment.id && (
+                                <div className="comment-actions" data-comment-menu-root={comment.id}>
+                                  <button
+                                    type="button"
+                                    className="comment-menu-trigger"
+                                    aria-label={text("评论操作", "Comment actions")}
+                                    aria-haspopup="menu"
+                                    aria-expanded={activeMenuId === comment.id}
+                                    onClick={() => setActiveMenuId((current) => current === comment.id ? null : comment.id)}
+                                  >
+                                    <MoreIcon color="currentColor" />
+                                  </button>
+                                  {activeMenuId === comment.id && (
+                                    <div className="comment-action-menu" role="menu">
+                                      <button
+                                        type="button"
+                                        role="menuitem"
+                                        disabled={savingCommentId !== null}
+                                        onClick={(event) => beginEdit(comment, event.currentTarget)}
+                                      >
+                                        <EditIcon color="currentColor" />
+                                        {text("编辑评论", "Edit comment")}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        role="menuitem"
+                                        className="danger"
+                                        onClick={() => { setPendingDelete(comment); setActiveMenuId(null); }}
+                                      >
+                                        <DeleteIcon color="currentColor" />
+                                        {text("删除评论", "Delete comment")}
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </header>
+      
+                            {editingId === comment.id ? (
+                              <div className="comment-edit-form">
+                                <InlineMediaComposer
+                                  ref={editingComposerRef}
+                                  className="comment-inline-media"
+                                  segments={editingSegments}
+                                  mentionTasks={tasks}
+                                  referenceTasks={referenceTasks}
+                                  completionContext={{
+                                    projectId: currentTask.projectId,
+                                    surface: "comment",
+                                  }}
+                                  placeholder={text("编辑评论", "Edit comment")}
+                                  ariaLabel={text("编辑评论", "Edit comment")}
+                                  disabled={savingCommentId === comment.id}
+                                  allowAttachments
+                                  onChange={setEditingSegments}
+                                  onError={setCommentsError}
+                                  onKeyDown={(event) => {
+                                    if (event.key === "Escape") {
+                                      event.preventDefault();
+                                      event.stopPropagation();
+                                      endCommentEdit();
+                                      return;
+                                    }
+                                    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                                      event.preventDefault();
+                                      void saveComment(comment);
+                                    }
+                                  }}
+                                />
+                                <div className="comment-edit-actions">
+                                  <div className="composer-footer-leading">
+                                    <button
+                                      className="comment-attach-button"
+                                      type="button"
+                                      disabled={savingCommentId === comment.id}
+                                      aria-label={text("添加评论附件", "Add comment attachments")}
+                                      title={text("添加附件", "Add attachments")}
+                                      onClick={() => editCommentAttachmentInputRef.current?.click()}
+                                    >
+                                      <AttachmentIcon color="currentColor" />
+                                    </button>
+                                    <input
+                                      ref={editCommentAttachmentInputRef}
+                                      type="file"
+                                      multiple
+                                      hidden
+                                      onChange={(event) => {
+                                        if (event.currentTarget.files) {
+                                          editingComposerRef.current?.addFiles(event.currentTarget.files);
+                                        }
+                                        event.currentTarget.value = "";
+                                      }}
+                                    />
+                                  </div>
+                                  <div>
+                                    <button
+                                      className="button secondary"
+                                      type="button"
+                                      disabled={savingCommentId === comment.id}
+                                      onClick={endCommentEdit}
+                                    >
+                                      {text("取消", "Cancel")}
+                                    </button>
+                                    <button
+                                      className="button primary"
+                                      type="button"
+                                      disabled={!editingDraft.trim() || savingCommentId === comment.id}
+                                      onClick={() => void saveComment(comment)}
+                                    >
+                                      {savingCommentId === comment.id
+                                        ? text("保存中…", "Saving…")
+                                        : text("保存", "Save")}
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            ) : (
+                              comment.body && (
+                                <div className="comment-body">
+                                  <DescriptionDocument
+                                    value={comment.body}
+                                    referenceTasks={referenceTasks}
+                                    onOpenTask={onOpenTask}
+                                    attachments={comment.attachments}
+                                    enableImagePreview
+                                    onOpenAttachment={handleAttachmentDownload}
+                                  />
+                                </div>
+                              )
+                            )}
+                            {(comment.threadBinding || comment.legacyLocalThreadId) && (
+                              <div className="comment-conversation-link">
+                                <ConversationLink
+                                  threadId={comment.threadBinding?.threadId ?? comment.legacyLocalThreadId!}
+                                  onOpen={() => comment.threadBinding
+                                    ? onOpenThread(comment.threadBinding)
+                                    : onOpenLegacyLocalThread(comment.legacyLocalThreadId!)}
+                                  onTerminal={() => onOpenInTerminal(
+                                    comment.threadBinding?.threadId ?? comment.legacyLocalThreadId!,
+                                  )}
+                                  onCopy={onCopy}
+                                />
                               </div>
                             )}
                           </div>
-                        )}
-                      </header>
-
-                      {editingId === comment.id ? (
-                        <div className="comment-edit-form">
-                          <InlineMediaComposer
-                            ref={editingComposerRef}
-                            className="comment-inline-media"
-                            segments={editingSegments}
-                            mentionTasks={tasks}
-                            referenceTasks={referenceTasks}
-                            completionContext={{
-                              projectId: currentTask.projectId,
-                              surface: "comment",
-                            }}
-                            placeholder={text("编辑评论", "Edit comment")}
-                            ariaLabel={text("编辑评论", "Edit comment")}
-                            disabled={savingCommentId === comment.id}
-                            allowAttachments
-                            onChange={setEditingSegments}
-                            onError={setCommentsError}
-                            onKeyDown={(event) => {
-                              if (event.key === "Escape") {
-                                event.preventDefault();
-                                event.stopPropagation();
-                                endCommentEdit();
-                                return;
-                              }
-                              if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-                                event.preventDefault();
-                                void saveComment(comment);
-                              }
-                            }}
-                          />
-                          <div className="comment-edit-actions">
-                            <div className="composer-footer-leading">
-                              <button
-                                className="comment-attach-button"
-                                type="button"
-                                disabled={savingCommentId === comment.id}
-                                aria-label={text("添加评论附件", "Add comment attachments")}
-                                title={text("添加附件", "Add attachments")}
-                                onClick={() => editCommentAttachmentInputRef.current?.click()}
-                              >
-                                <AttachmentIcon color="currentColor" />
-                              </button>
-                              <input
-                                ref={editCommentAttachmentInputRef}
-                                type="file"
-                                multiple
-                                hidden
-                                onChange={(event) => {
-                                  if (event.currentTarget.files) {
-                                    editingComposerRef.current?.addFiles(event.currentTarget.files);
-                                  }
-                                  event.currentTarget.value = "";
-                                }}
-                              />
-                            </div>
-                            <div>
-                              <button
-                                className="button secondary"
-                                type="button"
-                                disabled={savingCommentId === comment.id}
-                                onClick={endCommentEdit}
-                              >
-                                {text("取消", "Cancel")}
-                              </button>
-                              <button
-                                className="button primary"
-                                type="button"
-                                disabled={!editingDraft.trim() || savingCommentId === comment.id}
-                                onClick={() => void saveComment(comment)}
-                              >
-                                {savingCommentId === comment.id
-                                  ? text("保存中…", "Saving…")
-                                  : text("保存", "Save")}
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      ) : (
-                        comment.body && (
-                          <div className="comment-body">
-                            <DescriptionDocument
-                              value={comment.body}
-                              referenceTasks={referenceTasks}
-                              onOpenTask={onOpenTask}
-                              attachments={comment.attachments}
-                              enableImagePreview
-                              onOpenAttachment={handleAttachmentDownload}
-                            />
-                          </div>
-                        )
-                      )}
-                      {(comment.threadBinding || comment.legacyLocalThreadId) && (
-                        <div className="comment-conversation-link">
-                          <ConversationLink
-                            threadId={comment.threadBinding?.threadId ?? comment.legacyLocalThreadId!}
-                            onOpen={() => comment.threadBinding
-                              ? onOpenThread(comment.threadBinding)
-                              : onOpenLegacyLocalThread(comment.legacyLocalThreadId!)}
-                            onTerminal={() => onOpenInTerminal(
-                              comment.threadBinding?.threadId ?? comment.legacyLocalThreadId!,
-                            )}
-                            onCopy={onCopy}
-                          />
-                        </div>
-                      )}
-                    </div>
-                  </article>
+                        </article>
+                        );
+                      })}
+                    </section>
                   );
                 })}
               </div>
@@ -1962,29 +2241,27 @@ export function TaskDetail({
               <div className="detail-property-row detail-schedule-runs">
                 <span className="detail-property-icon" aria-hidden="true"><RecurrenceIcon color="currentColor" size={14} /></span>
                 <span className="detail-property-label">{text("执行轮次", "Rounds")}</span>
-                <ul className="schedule-run-list">
-                  {scheduleRunList.slice(0, 20).map((run) => (
-                    <li key={run.id} className={`schedule-run is-${run.status}`}>
-                      <b>{text(`第 ${run.sequence} 轮`, `Round ${run.sequence}`)}</b>
-                      <span className="schedule-run-trigger">
-                        {run.trigger === "schedule" ? text("定时", "Scheduled") : text("手动", "Manual")}
-                      </span>
-                      <time title={exactTime(run.startedAt, locale)}>{exactTime(run.startedAt, locale)}</time>
-                      <span className="schedule-run-status">
-                        {run.status === "running"
-                          ? text("执行中", "Running")
-                          : run.status === "completed"
-                            ? text("已完成", "Completed")
-                            : run.status === "failed"
-                              ? text("失败", "Failed")
-                              : text("已中断", "Interrupted")}
-                      </span>
-                      {run.error && (
-                        <span className="schedule-run-error" title={run.error}>{run.error}</span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
+                <button
+                  type="button"
+                  className="detail-property-trigger detail-runs-trigger"
+                  title={latestScheduleRun ? exactTime(latestScheduleRun.startedAt, locale) : undefined}
+                  onClick={() => setRunsDialogOpen(true)}
+                >
+                  <span className="detail-runs-summary">
+                    {currentTask.scheduleRuns?.current
+                      ? text(
+                        `第 ${currentTask.scheduleRuns.current.sequence} 轮执行中 · 共 ${runTotal} 轮`,
+                        `Round ${currentTask.scheduleRuns.current.sequence} running · ${runTotal} total`,
+                      )
+                      : latestScheduleRun
+                        ? text(
+                          `共 ${runTotal} 轮 · 最新${scheduleRunStatusLabel(latestScheduleRun.status, text)}`,
+                          `${runTotal} rounds · latest ${scheduleRunStatusLabel(latestScheduleRun.status, text)}`,
+                        )
+                        : text(`共 ${runTotal} 轮`, `${runTotal} rounds`)}
+                  </span>
+                  <LinearIcon name="chevronRight" />
+                </button>
               </div>
             )}
             <IssueRelationSidebar
@@ -2011,6 +2288,96 @@ export function TaskDetail({
           </aside>
         </div>
       </div>
+
+      {runsDialogOpen && scheduleRunList.length > 0 && (
+        <div
+          className="delete-backdrop"
+          role="presentation"
+          onPointerDown={(event) => {
+            if (event.target === event.currentTarget) setRunsDialogOpen(false);
+          }}
+        >
+          <div
+            className="delete-dialog schedule-runs-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="schedule-runs-title"
+          >
+            <header className="schedule-runs-header">
+              <div>
+                <h2 id="schedule-runs-title">{text("执行轮次", "Execution rounds")}</h2>
+                <p>{text(
+                  `${currentTask.scheduleRuns?.current
+                    ? `第 ${currentTask.scheduleRuns.current.sequence} 轮执行中`
+                    : `共 ${runTotal} 轮`}`,
+                  `${currentTask.scheduleRuns?.current
+                    ? `Round ${currentTask.scheduleRuns.current.sequence} running`
+                    : `${runTotal} rounds total`}`,
+                )}</p>
+              </div>
+              <button
+                type="button"
+                className="icon-button"
+                aria-label={text("关闭", "Close")}
+                onClick={() => setRunsDialogOpen(false)}
+              >
+                <LinearIcon name="close" />
+              </button>
+            </header>
+            <div className="schedule-runs-summary">
+              {scheduleRunCounts.running > 0 && (
+                <span className="schedule-runs-chip is-running">
+                  {text(`执行中 ${scheduleRunCounts.running}`, `${scheduleRunCounts.running} running`)}
+                </span>
+              )}
+              {scheduleRunCounts.completed > 0 && (
+                <span className="schedule-runs-chip is-completed">
+                  {text(`已完成 ${scheduleRunCounts.completed}`, `${scheduleRunCounts.completed} completed`)}
+                </span>
+              )}
+              {scheduleRunCounts.failed > 0 && (
+                <span className="schedule-runs-chip is-failed">
+                  {text(`失败 ${scheduleRunCounts.failed}`, `${scheduleRunCounts.failed} failed`)}
+                </span>
+              )}
+              {scheduleRunCounts.interrupted > 0 && (
+                <span className="schedule-runs-chip is-interrupted">
+                  {text(`已中断 ${scheduleRunCounts.interrupted}`, `${scheduleRunCounts.interrupted} interrupted`)}
+                </span>
+              )}
+            </div>
+            <div className="schedule-runs-scroll">
+              {scheduleRunList.map((run) => (
+                <article key={run.id} className={`schedule-run is-${run.status}`}>
+                  <div className="schedule-run-main">
+                    <b>{text(`第 ${run.sequence} 轮`, `Round ${run.sequence}`)}</b>
+                    <span className="schedule-run-trigger">
+                      {run.trigger === "schedule" ? text("定时", "Scheduled") : text("手动", "Manual")}
+                    </span>
+                    <span className="schedule-run-status">{scheduleRunStatusLabel(run.status, text)}</span>
+                    {run.threadId && (
+                      <button
+                        type="button"
+                        className="schedule-run-view"
+                        onClick={() => focusRoundActivity(run)}
+                      >
+                        {text("查看动态", "View activity")}
+                      </button>
+                    )}
+                  </div>
+                  <div className="schedule-run-meta">
+                    <time title={exactTime(run.startedAt, locale)}>
+                      {text("开始于 ", "Started ")}{exactTime(run.startedAt, locale)}
+                    </time>
+                    <span>{formatRunDuration(run, text)}</span>
+                  </div>
+                  {run.error && <p className="schedule-run-error">{run.error}</p>}
+                </article>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {pendingDelete && (
         <div className="delete-backdrop" role="presentation" onMouseDown={(event) => {
