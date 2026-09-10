@@ -14,8 +14,10 @@ import { dueDateDeadline, nextScheduleOccurrence } from "../shared/schedule.mjs"
 import {
   modelProfileEnvironment,
   modelProfileSettingsArg,
+  skillDirectoryFor,
   spawnClaudeTurn,
 } from "./ai-chat-process.mjs";
+import { claudeHomeDirectory } from "./ai-chat-catalog.mjs";
 import { ApiError } from "./database.mjs";
 import { getQuotaStatus } from "./quota.mjs";
 
@@ -58,6 +60,7 @@ export class LocalAutomationScheduler {
     this.database = options.database;
     this.claudeExecutable = options.claudeExecutable;
     this.skillPath = options.skillPath;
+    this.claudeHome = options.claudeHome ?? claudeHomeDirectory(options.processEnv ?? process.env);
     this.processEnv = options.processEnv ?? process.env;
     this.killGraceMs = options.killGraceMs ?? 1_000;
     this.boardBaseUrl = options.boardBaseUrl ?? null;
@@ -552,9 +555,16 @@ export class LocalAutomationScheduler {
       "Bash",
       "WebSearch",
       "WebFetch",
-      "--session-id",
-      sessionId,
     ];
+    // The prompt points this session at the manage-taskboard skill directory
+    // outside the workspace, and issue descriptions may reference any
+    // user-level skill under ~/.claude/skills. Headless permission requests
+    // to read those directories are auto-denied, so both are passed via
+    // --add-dir (a missing directory is tolerated by Claude Code).
+    const skillDirectory = skillDirectoryFor(request.skillPath);
+    if (skillDirectory) args.push("--add-dir", skillDirectory);
+    args.push("--add-dir", path.join(this.claudeHome, "skills"));
+    args.push("--session-id", sessionId);
     if (reasoningEffort) args.push("--effort", reasoningEffort);
     const profileSettings = modelProfileSettingsArg(modelProfile);
     if (profileSettings) args.push("--settings", profileSettings);

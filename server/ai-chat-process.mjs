@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { withoutTaskboardLauncherEnvironment } from "../shared/taskboard-environment.mjs";
@@ -293,6 +294,20 @@ export function modelProfileEnvironment(profile) {
 export function modelProfileSettingsArg(profile) {
   const env = modelProfileEnvironment(profile);
   return Object.keys(env).length > 0 ? JSON.stringify({ env }) : null;
+}
+
+// Controller prompts reference the manage-taskboard skill by absolute path
+// (default <repo>/skills/manage-taskboard/SKILL.md), which lives outside every
+// board workspace. Headless sessions auto-deny the resulting permission
+// requests, so the skill directory must be passed via --add-dir to keep its
+// files readable by Read/Grep/Glob. Accepts both the SKILL.md file form and a
+// plain directory path.
+export function skillDirectoryFor(skillPath) {
+  if (typeof skillPath !== "string" || !skillPath.trim()) return null;
+  const value = skillPath.trim();
+  return path.basename(value).toLowerCase() === "skill.md"
+    ? path.dirname(value)
+    : value;
 }
 
 export function buildClaudeArgs(thread, addDirectories = [], sessionId = null) {

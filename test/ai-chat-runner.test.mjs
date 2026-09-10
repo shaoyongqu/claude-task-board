@@ -302,6 +302,18 @@ test("a claude turn persists events, binds the session id, and completes the run
     assert.deepEqual(capture.launcherKeys, []);
     assert.ok(capture.args.includes("--session-id"));
     assert.ok(capture.args.includes("stream-json"));
+    // The turn prompt references the manage-taskboard skill directory outside
+    // the workspace, and any user-level skill under ~/.claude/skills must stay
+    // readable even without an explicit @-reference — both via --add-dir.
+    const addDirValues = capture.args.filter((_, index) => capture.args[index - 1] === "--add-dir");
+    assert.ok(
+      addDirValues.includes(path.join(fixture.claudeHome, "skills", "manage-taskboard")),
+      "ai-chat turn must pass --add-dir for the manage-taskboard skill",
+    );
+    assert.ok(
+      addDirValues.includes(path.join(fixture.claudeHome, "skills")),
+      "ai-chat turn must pass --add-dir for the user skills directory",
+    );
   } finally {
     await fixture.service.close();
     fixture.database.close();

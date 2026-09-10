@@ -16,6 +16,7 @@ import {
   buildClaudePrompt,
   modelProfileEnvironment,
   normalizeClaudeEvent,
+  skillDirectoryFor,
   spawnClaudeTurn,
 } from "./ai-chat-process.mjs";
 
@@ -363,7 +364,23 @@ export class AiChatService {
       // drives Claude Code through the environment, so the --model alias flag
       // must not override it.
       const argThread = profileEnv.ANTHROPIC_MODEL ? { ...thread, model: "default" } : thread;
-      const args = buildClaudeArgs(argThread, resolved.addDirectories, turnSessionId);
+      // The prompt points the session at the manage-taskboard skill directory
+      // and each selected skill's directory by absolute path, and the
+      // conversation may ask for any user-level skill under ~/.claude/skills
+      // without an explicit @-reference. Those paths live outside the
+      // workspace and their reads are auto-denied in headless sessions unless
+      // added here (a missing directory is tolerated by Claude Code).
+      const skillDirectories = [...new Set([
+        path.join(this.claudeHome, "skills"),
+        ...[this.manageTaskboardSkillPath, ...selectedSkills.map((skill) => skill.path)]
+          .map((skillPath) => skillDirectoryFor(skillPath))
+          .filter((directory) => directory !== null),
+      ])];
+      const args = buildClaudeArgs(
+        argThread,
+        [...resolved.addDirectories, ...skillDirectories],
+        turnSessionId,
+      );
       const profileSettings = Object.keys(profileEnv).length > 0
         ? JSON.stringify({ env: profileEnv })
         : null;

@@ -2074,6 +2074,7 @@ export function createTaskboardServer(options = {}) {
     database,
     claudeExecutable: resolved.claudeExecutable,
     skillPath: resolved.skillPath,
+    claudeHome: resolved.claudeHome,
     processEnv: rawSchedulerEnvironment,
     killGraceMs: 1_000,
     persistPath: path.join(resolved.dataDirectory, "automation-configs.json"),

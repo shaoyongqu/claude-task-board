@@ -162,10 +162,12 @@ process.stdin.on("end", () => {
 `);
   await chmod(executable, 0o755);
   const database = new TaskboardDatabase(path.join(directory, "taskboard.sqlite"));
+  const claudeHome = path.join(directory, "claude-home");
   const scheduler = new LocalAutomationScheduler({
     database,
     claudeExecutable: executable,
     skillPath: path.join(directory, "skills", "manage-taskboard"),
+    claudeHome,
     processEnv: process.env,
     killGraceMs: 250,
   });
@@ -203,6 +205,12 @@ test("the local scheduler runs one claude controller turn for a todo", async () 
     const capture = await waitForCapture(fixture.capturePath, 8_000);
     assert.match(capture.threadId, /^[0-9a-f-]{36}$/);
     assert.ok(capture.args.includes("--session-id"));
+    // The controller prompt references the manage-taskboard skill directory
+    // outside the workspace, and issue descriptions may reference any
+    // user-level skill — both directories must be readable via --add-dir.
+    const addDirValues = capture.args.filter((_, index) => capture.args[index - 1] === "--add-dir");
+    assert.ok(addDirValues.includes(fixture.request.skillPath));
+    assert.ok(addDirValues.includes(path.join(fixture.directory, "claude-home", "skills")));
     assert.ok(capture.promptLength > 200);
 
     await fixture.scheduler.close();
